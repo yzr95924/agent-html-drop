@@ -26,6 +26,10 @@ else
   docker build -q -t "$IMG" .
 fi
 
+echo ">> preparing docroot test file (BEFORE container start, so entrypoint's chown 1000:1000 doesn't strip host write access)"
+mkdir -p "${DATA_DIR}/docroot"
+printf '<html><body>smoke</body></html>' > "${DATA_DIR}/docroot/smoke.html"
+
 echo ">> running container (exercises root→ahd privilege drop + /files self-service)"
 docker run -d --name "$CID" \
   -p "127.0.0.1:${HOST_PORT}:8765" \
@@ -42,8 +46,6 @@ curl -sf "http://127.0.0.1:${HOST_PORT}/api/health" | grep -Eq '"status":[[:spac
 echo "   health OK"
 
 echo ">> probing daemon-served /files/<name>"
-mkdir -p "${DATA_DIR}/docroot"
-printf '<html><body>smoke</body></html>' > "${DATA_DIR}/docroot/smoke.html"
 curl -sf "http://127.0.0.1:${HOST_PORT}/files/smoke.html" | grep -q 'smoke'
 echo "   /files/smoke.html OK"
 
