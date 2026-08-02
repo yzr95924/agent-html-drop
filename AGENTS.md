@@ -1,0 +1,97 @@
+# AGENTS.md
+
+## 项目定位
+
+`agent-html-drop` 是一个常驻 HTTP daemon：让本机 AI coding agent（Claude Code / OpenCode）
+通过 MCP（Streamable HTTP）把 `yzr-md-to-html` 等产出的自包含 HTML 推到远端 nginx server，
+同时提供一个浏览器管理页（列表 / 预览 / 删除 / 复制公开 URL）与可选的浏览器侧批注。
+
+前身是 `yzr-agent-tools` 仓库里的 `html-mcp`，2026-08 独立成单工具仓库并更名。
+
+> **文档分层**：本文件承载 agent 工作上下文（规约 / 命令 / 架构）；**用户文档**（安装 /
+> 快速上手 / 命令一览 / 局限性）见根 `README.md`。**设计文档**在 `docs/`（`design.md` +
+> `tasks.md` + 决策日志）。
+
+## 仓库规约
+
+- **测试绝不能触碰真实的服务配置**（`~/.config/agent-html-drop/`——线上 daemon 的
+  config.toml / token 就在那里）。`tests/conftest.py` 的 autouse fixture 强制：snapshot
+  真实配置目录的 mtime，重定向 `paths.*` 到 tmp，测试结束后断言未变。
+- **Python 3.7+ 兼容**。pyproject 固定 `tomli>=1.1`（<3.11 时）。CLI 用 stdlib `argparse`，
+  无第三方运行时依赖。禁 `dict[str, str]` 语法、walrus、`match`；用 `from typing import Dict, List, Optional`。
+- **config TOML 必须透传未知字段**（`config.py` 读写往返不丢用户自定义键）。
+- **原子写文件**。TOML 与 docroot 文件都先写 `.tmp` 再 `os.replace()`，永远不出现半写状态。
+- **路径穿越防护**：所有文件名过 `^[A-Za-z0-9._-]+\.html$` regex，绝不拼接未校验的用户输入进路径。
+
+## 常用命令
+
+```bash
+# 安装 — 走 shell wrapper + PYTHONPATH 路线（不创建 venv，不调用 pip）。
+# 需要 Python 3.7+；Python < 3.11 时请自备 tomli（pip install --user 'tomli>=1.1'）。
+# 同时安装 bash/fish 补全：symlink 到 XDG 补全目录 + ~/.bashrc marker block 内 source 行。
+bash scripts/install.sh
+# 卸载（删 wrapper + 剥 PATH marker + 删补全 symlink；不动 ~/.config/agent-html-drop/ 下的数据）
+bash scripts/uninstall.sh
+# 服务控制（不动 shell rc）：
+scripts/agent-html-drop.sh start|stop|restart|status|install|uninstall
+
+# 测试 — 需要 pytest + pytest-cov 自装（pip install --user pytest pytest-cov）。
+# pyproject.toml 的 [tool.pytest.ini_options].pythonpath 已含 src/，
+# 不需要 `pip install -e .` 也能 import agent_html_drop。
+pytest
+pytest tests/test_cli.py -v                   # 单文件
+pytest --cov=agent_html_drop                  # 带覆盖率
+
+# CLI 自身
+agent-html-drop init                            # 初始化 ~/.config/agent-html-drop/,生成 bearer token
+agent-html-drop serve                           # 前台启动 (Ctrl+C 停);生产建议 tmux / systemd 用户单元
+agent-html-drop token show                      # 打印 token,配到 agent MCP config
+agent-html-drop nginx-config                    # 打印 nginx server block 到 stdout
+agent-html-drop nginx-config --write            # 写到 ~/.config/agent-html-drop/nginx.conf.example
+agent-html-drop status                          # config / token / docroot 状态
+```
+
+## 高层结构
+
+```
+src/
+└── agent_html_drop/           # 常驻 daemon(单包)
+    ├── cli.py                 argparse (init / serve / token / config / nginx-config / status)
+    ├── __main__.py            python -m agent_html_drop 入口
+    ├── _version.py            VERSION 字符串 (/api/health + CLI --version)
+    ├── paths.py               XDG 路径解析 (~/.config/agent-html-drop)
+    ├── config.py              TOML I/O + 透传未知字段 + validate_for_serve
+    ├── auth.py                Bearer token 常量时间比较 + redact_token
+    ├── auth_anno.py           批注 session cookie(30 分钟,HttpOnly/Secure/SameSite=Lax)
+    ├── _legacy_storage.py     docroot 文件 CRUD (atomic write / 命名 regex / 路径穿越防护)
+    ├── storage/               批注存储 (annotations.py,.meta 与 .html 严格分离)
+    ├── server.py              http.server.ThreadingHTTPServer + 路由 + body 限流
+    ├── mcp_handler.py         JSON-RPC Streamable HTTP + 6 个 tool
+    ├── api.py                 /api/files /api/nginx-config /api/health /api/auth /api/annotations
+    ├── nginx_config.py        assets/nginx.conf.template 渲染
+    ├── ui.py                  ui/{index.html,style.css,app.js} 静态路由
+    ├── _compat.py             TOML loader (tomllib/tomli) + 手写 dumper
+    ├── assets/
+    │   └── nginx.conf.template  nginx server block 模板(含 /api/auth limit_req)
+    └── ui/                    管理页静态资源 (vanilla JS;批注模式状态机 + iframe <mark> 注入)
+```
+
+### 形态要点
+
+daemon 监听 `127.0.0.1:8765`（默认），由 nginx 在前面 HTTPS 反代 + 终结 TLS。同一进程暴露 4 类入口：
+
+- `POST /mcp` —— MCP Streamable HTTP（agent 走这里，`Authorization: Bearer <token>` 强制）
+- `GET /` —— HTML 管理页（浏览器，只读；批注模式走 session cookie）
+- `* /api/*` —— JSON API（管理页背后；DELETE 等写操作仍要 Bearer）
+- `/files/*` —— nginx 直接从 docroot 读取（daemon 不参与）
+
+MCP 工具（`tools/call`）：`upload_html` / `list_html` / `delete_html` / `get_public_url`
+/ `list_annotations` / `delete_annotation`。MCP 协议自实现，无第三方 SDK 依赖。
+
+详见 `docs/design.md` / `docs/tasks.md`。
+
+## 注意事项
+
+- 管理页**故意**只读：删除 / 上传只能走 agent MCP；token 不进 UI、不进 localStorage。
+- 批注写路径（浏览器 session cookie）与 HTML 写路径（agent Bearer）**互不重叠**；
+  agent 无 `add_annotation`，浏览器无 HTML 写接口。

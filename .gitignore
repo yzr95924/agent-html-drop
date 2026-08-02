@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# agent-html-drop: install.sh writes a thin bash wrapper into ./bin/ on every
+# run (idempotent, templated). Don't track generated artifacts —
+# re-run install.sh after a fresh clone.
+/bin/

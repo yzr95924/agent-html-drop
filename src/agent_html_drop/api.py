@@ -1,0 +1,321 @@
+"""JSON API endpoints used by the management page in the browser.
+
+Four endpoints (design §7.3 / §8):
+
+  - ``GET /api/files``                Bearer; list docroot
+  - ``DELETE /api/files/<name>``      Bearer; delete
+  - ``GET /api/nginx-config``         Bearer; rendered server block
+  - ``GET /api/health``               NO AUTH; liveness probe
+
+Each handler is a closure over ``cfg`` (built by ``register_routes``).
+Storage exceptions map to HTTP status codes per design §7.3.
+"""
+import json
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+from agent_html_drop import nginx_config as nginx_mod
+from agent_html_drop import server as srv
+from agent_html_drop import _legacy_storage as storage
+from agent_html_drop.auth import check_bearer
+from agent_html_drop.auth_anno import (
+    ANNO_COOKIE_MAX_AGE,
+    ANNO_COOKIE_NAME,
+    cookie_set_header,
+    csrf_check,
+    sign_cookie,
+    verify_cookie,
+)
+from agent_html_drop.config import Config
+from agent_html_drop.storage import annotations as anno_store
+
+from ._version import VERSION
+
+
+JSON = {"Content-Type": "application/json"}
+TEXT = {"Content-Type": "text/plain; charset=utf-8"}
+
+
+# --- helpers -----------------------------------------------------------------
+
+def _unauthorized() -> Tuple[int, bytes, Dict[str, str]]:
+    return (
+        401,
+        b'{"error":"unauthorized"}',
+        JSON,
+    )
+
+
+def _require_bearer(req, cfg: Config):
+    """Return None on success, or an error response tuple."""
+    if not check_bearer(req.headers.get("Authorization"), cfg.token):
+        return _unauthorized()
+    return None
+
+
+def _storage_error(exc: storage.StorageError):
+    """Map a storage exception to an HTTP response."""
+    if isinstance(exc, storage.InvalidName):
+        return (400, _err("invalid_name", str(exc)), JSON)
+    if isinstance(exc, storage.Conflict):
+        return (409, _err("conflict", str(exc)), JSON)
+    if isinstance(exc, storage.TooLarge):
+        return (413, _err("too_large", str(exc)), JSON)
+    if isinstance(exc, storage.NotFound):
+        return (404, _err("not_found", str(exc)), JSON)
+    if isinstance(exc, storage.DocrootUnwritable):
+        return (500, _err("docroot_unwritable", str(exc)), JSON)
+    # Unknown storage error → 500.
+    return (500, _err("storage_error", str(exc)), JSON)
+
+
+def _err(code: str, msg: str) -> bytes:
+    return json.dumps({"error": code, "message": msg}).encode("utf-8")
+
+
+def _file_info_payload(
+    f: storage.FileInfo, public_base_url: str, docroot: Path
+) -> Dict[str, Any]:
+    return {
+        "name": f.name,
+        "size": f.size,
+        "mtime": f.mtime,
+        "url": public_base_url.rstrip("/") + "/" + f.name,
+        "title": f.title,
+        "annotation_count": anno_store.count(docroot, f.name),
+    }
+
+
+# --- handlers ----------------------------------------------------------------
+
+def _validate_anno_name(name: str) -> bool:
+    """Validate annotation lookup name (same regex as storage layer)."""
+    import re as _re
+    return bool(name) and bool(_re.match(r"^[A-Za-z0-9._-]+\.html$", name, _re.IGNORECASE))
+
+
+def _anno_session_token(req) -> "Optional[str]":
+    """Extract the token from the anno_session cookie, if valid."""
+    cookie_header = req.headers.get("Cookie")
+    if not cookie_header:
+        return None
+    from http.cookies import SimpleCookie as _SC
+    sc = _SC()
+    try:
+        sc.load(cookie_header)
+    except Exception:
+        return None
+    morsel = sc.get(ANNO_COOKIE_NAME)
+    if morsel is None:
+        return None
+    return verify_cookie(morsel.value)
+
+
+def _make_get_annotations(cfg: Config):
+    """GET /api/files/<name>/annotations — public, no auth."""
+    def handler(req, params, body):
+        docroot = Path(cfg.docroot)
+        name = params.get("name", "")
+        if not _validate_anno_name(name):
+            return (400, _err("invalid_name", "name failed validation"), JSON)
+        entries = anno_store.list_for(docroot, name)
+        return (
+            200,
+            json.dumps({
+                "name": name,
+                "annotations": entries,
+            }, ensure_ascii=False).encode("utf-8"),
+            JSON,
+        )
+    return handler
+
+
+def _make_post_annotation(cfg: Config):
+    """POST /api/files/<name>/annotations — cookie + CSRF."""
+    def handler(req, params, body):
+        token = _anno_session_token(req)
+        if not token:
+            return (401, _err("unauthorized", "no valid anno session"), JSON)
+        if not csrf_check(req.headers.get("Host", ""), req.headers.get("Origin")):
+            return (403, _err("csrf", "origin mismatch"), JSON)
+        name = params.get("name", "")
+        if not _validate_anno_name(name):
+            return (400, _err("invalid_name", "name failed validation"), JSON)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return (400, _err("invalid_body", "body must be JSON"), JSON)
+        if not isinstance(payload, dict):
+            return (400, _err("invalid_args", "body must be a JSON object"), JSON)
+        quote = payload.get("quote")
+        comment = payload.get("comment")
+        if not isinstance(quote, str) or not isinstance(comment, str):
+            return (400, _err("invalid_args", "quote and comment must be strings"), JSON)
+        try:
+            entry = anno_store.add(Path(cfg.docroot), name, quote, comment, token)
+        except (ValueError, TypeError) as exc:
+            return (400, _err("invalid_args", str(exc)), JSON)
+        return (201, json.dumps(entry, ensure_ascii=False).encode("utf-8"), JSON)
+    return handler
+
+
+def _author_of(token: str) -> str:
+    return anno_store.author_of_token(token)
+
+
+def _make_patch_annotation(cfg: Config):
+    """PATCH /api/files/<name>/annotations/<id> — cookie + CSRF + author."""
+    def handler(req, params, body):
+        token = _anno_session_token(req)
+        if not token:
+            return (401, _err("unauthorized", "no valid anno session"), JSON)
+        if not csrf_check(req.headers.get("Host", ""), req.headers.get("Origin")):
+            return (403, _err("csrf", "origin mismatch"), JSON)
+        name = params.get("name", "")
+        id_ = params.get("id", "")
+        if not _validate_anno_name(name):
+            return (400, _err("invalid_name", "name failed validation"), JSON)
+        docroot = Path(cfg.docroot)
+        existing = anno_store.get(docroot, name, id_)
+        if existing is None:
+            return (404, _err("not_found", "annotation not found"), JSON)
+        if existing["author"] != _author_of(token):
+            return (403, _err("forbidden", "not your annotation"), JSON)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return (400, _err("invalid_body", "body must be JSON"), JSON)
+        if not isinstance(payload, dict):
+            return (400, _err("invalid_args", "body must be a JSON object"), JSON)
+        comment = payload.get("comment")
+        if not isinstance(comment, str):
+            return (400, _err("invalid_args", "comment must be a string"), JSON)
+        existing["comment"] = comment[:2000]
+        # Save by replacing the entry in-place: load → mutate → save.
+        doc = anno_store.load(docroot, name)
+        for i, e in enumerate(doc["annotations"]):
+            if e.get("id") == id_:
+                doc["annotations"][i] = existing
+                break
+        anno_store.save(docroot, name, doc)
+        return (200, json.dumps(existing, ensure_ascii=False).encode("utf-8"), JSON)
+    return handler
+
+
+def _make_delete_annotation(cfg: Config):
+    """DELETE /api/files/<name>/annotations/<id> — cookie + CSRF + author."""
+    def handler(req, params, body):
+        token = _anno_session_token(req)
+        if not token:
+            return (401, _err("unauthorized", "no valid anno session"), JSON)
+        if not csrf_check(req.headers.get("Host", ""), req.headers.get("Origin")):
+            return (403, _err("csrf", "origin mismatch"), JSON)
+        name = params.get("name", "")
+        id_ = params.get("id", "")
+        if not _validate_anno_name(name):
+            return (400, _err("invalid_name", "name failed validation"), JSON)
+        ok = anno_store.delete(Path(cfg.docroot), name, id_, token)
+        if not ok:
+            # Indistinguishable: id not found OR author mismatch → 403.
+            return (403, _err("forbidden", "cannot delete this annotation"), JSON)
+        return (200, json.dumps({"deleted": True}).encode("utf-8"), JSON)
+    return handler
+
+def _make_list_files(cfg: Config):
+    def handler(req, params, body):
+        # No auth: list_html returns public metadata (name/size/mtime/title/url)
+        # of files in a docroot that nginx already serves unauthenticated at
+        # /files/*. Single-user trust model + nginx reverse proxy in front.
+        # Write paths (DELETE /api/files/<name>, POST /mcp) still require
+        # Bearer — the management page does not expose those.
+        docroot = Path(cfg.docroot)
+        try:
+            files = storage.list_files(docroot)
+        except storage.StorageError as exc:
+            return _storage_error(exc)
+        payload = {
+            "files": [
+                _file_info_payload(f, cfg.public_base_url, docroot) for f in files
+            ]
+        }
+        return (200, json.dumps(payload).encode("utf-8"), JSON)
+    return handler
+
+
+def _make_auth(cfg: Config):
+    """Exchange a valid Bearer token for an annotation session cookie."""
+    def handler(req, params, body):
+        if not check_bearer(req.headers.get("Authorization"), cfg.token):
+            return _unauthorized()
+        cookie_value = sign_cookie(cfg.token, max_age=ANNO_COOKIE_MAX_AGE)
+        return (
+            204,
+            b"",
+            {
+                "Set-Cookie": cookie_set_header(
+                    cookie_value, ANNO_COOKIE_MAX_AGE
+                )
+            },
+        )
+    return handler
+
+
+def _make_delete_file(cfg: Config):
+    def handler(req, params, body):
+        err = _require_bearer(req, cfg)
+        if err:
+            return err
+        name = params.get("name", "")
+        docroot = Path(cfg.docroot)
+        try:
+            deleted = storage.delete(docroot, name)
+        except storage.StorageError as exc:
+            return _storage_error(exc)
+        if not deleted:
+            return (404, _err("not_found", "file does not exist: {}".format(name)), JSON)
+        return (200, json.dumps({"deleted": True}).encode("utf-8"), JSON)
+    return handler
+
+
+def _make_nginx_config(cfg: Config):
+    def handler(req, params, body):
+        err = _require_bearer(req, cfg)
+        if err:
+            return err
+        text = nginx_mod.render(
+            docroot=cfg.docroot,
+            port=cfg.port,
+            public_base_url=cfg.public_base_url,
+        )
+        return (200, text.encode("utf-8"), TEXT)
+    return handler
+
+
+def _health_handler(req, params, body):
+    """No auth — health probes must be reachable without a token."""
+    payload = {"status": "ok", "version": VERSION}
+    return (200, json.dumps(payload).encode("utf-8"), JSON)
+
+
+# --- registration ------------------------------------------------------------
+
+def register_routes(cfg: Config) -> None:
+    """Register all /api/* and /health routes on the server registry."""
+    srv.register("GET", r"^/api/files$", _make_list_files(cfg))
+    srv.register("DELETE", r"^/api/files/(?P<name>[^/]+)$", _make_delete_file(cfg))
+    srv.register("GET", r"^/api/nginx-config$", _make_nginx_config(cfg))
+    srv.register("GET", r"^/api/health$", _health_handler)
+    srv.register("POST", r"^/api/auth$", _make_auth(cfg))
+    # Annotation REST endpoints.
+    srv.register("GET",
+                 r"^/api/files/(?P<name>[^/]+)/annotations$",
+                 _make_get_annotations(cfg))
+    srv.register("POST",
+                 r"^/api/files/(?P<name>[^/]+)/annotations$",
+                 _make_post_annotation(cfg))
+    srv.register("PATCH",
+                 r"^/api/files/(?P<name>[^/]+)/annotations/(?P<id>[A-Za-z0-9_-]+)$",
+                 _make_patch_annotation(cfg))
+    srv.register("DELETE",
+                 r"^/api/files/(?P<name>[^/]+)/annotations/(?P<id>[A-Za-z0-9_-]+)$",
+                 _make_delete_annotation(cfg))

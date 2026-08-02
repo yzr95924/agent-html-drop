@@ -1,1 +1,198 @@
-HTML drop server 
+# agent-html-drop
+
+常驻 HTTP daemon，让本机 agent（Claude Code / OpenCode）经 MCP 把自包含 HTML
+（`yzr-md-to-html` 等工具的产物）推到远端 nginx server，同时提供一个 HTML 管理页供人浏览 /
+预览 / 删除 / 复制公开 URL。
+
+> 本服务前身为 `yzr-agent-tools` 仓库里的 `html-mcp`，2026-08 起独立成单工具仓库并更名
+> `agent-html-drop`。从旧部署迁移见下方「从 html-mcp 迁移」。
+
+## 形态
+
+```
+┌──────────────────────┐                ┌──────────────────────────────────────┐
+│  本机 agent           │   HTTPS        │  远端 nginx server                   │
+│  (Claude Code /      │ ─────────────► │   ┌────────────────────────────┐     │
+│   OpenCode)          │  /mcp + Bearer │   │ agent-html-drop daemon     │     │
+│                      │                │   │  127.0.0.1:8765            │     │
+│                      │                │   │  ├ POST /mcp    MCP server │     │
+│                      │                │   │  ├ GET  /       HTML 管理页│     │
+│                      │                │   │  └ /api/* + /files/        │     │
+│                      │                │   └────────────┬───────────────┘     │
+│  浏览器（人）         │ ──HTTPS──────► │       ┌────────▼────────────┐       │
+│   https://notes...   │                │       │ nginx               │       │
+│                      │                │       │  :443 → 反代 → :8765│       │
+│                      │                │       │  + 直 serve /files/*│       │
+│                      │                │       └─────────┬───────────┘       │
+│                      │                │           docroot/                  │
+└──────────────────────┘                └──────────────────────────────────────┘
+```
+
+- **daemon 监听 `127.0.0.1` only**——由 nginx 在前面 HTTPS 反代 + 终结 TLS
+- **单进程 stdlib `http.server.ThreadingHTTPServer`**——无第三方运行时依赖
+- **MCP Streamable HTTP 自实现 ~150 行**——4 个 tool，无 MCP SDK
+
+## 安装
+
+```bash
+bash scripts/install.sh    # 装 wrapper + bash/fish 补全,扩展 PATH marker
+source ~/.bashrc
+agent-html-drop --help
+```
+
+> stdlib-only 依赖——Python ≥ 3.7，<3.11 时自备 `tomli>=1.1`。
+
+## 从 html-mcp 迁移
+
+旧版（`yzr-agent-tools` 仓库的 `html-mcp`）已部署的机器：
+
+```bash
+# 1. 停旧 daemon(在旧仓库里)
+html-mcp-service stop    # 或 scripts/html-mcp.sh stop
+
+# 2. 搬配置(token / docroot / port 全部保留)
+mv ~/.config/html-mcp ~/.config/agent-html-drop
+
+# 3. 装新版
+cd ~/agent-html-drop && bash scripts/install.sh && source ~/.bashrc
+
+# 4. 起新 daemon
+agent-html-drop-service start   # 或 scripts/agent-html-drop.sh start
+```
+
+nginx server block、docroot、公开 URL 均不变；本机 agent 侧 MCP config 里的
+`url` / `Authorization` 头也不变（server 名 `html-mcp` → `agent-html-drop` 只是显示名，
+改不改都行）。旧仓库侧的 wrapper 可用 `yzr-agent-tools` 旧拷贝里的
+`scripts/html-mcp.sh uninstall` 卸掉。
+
+## 快速上手（在远端 nginx server 上）
+
+```bash
+# 1. 初始化
+agent-html-drop init
+# 输出一段 token,记下来(或 `agent-html-drop token show` 重看)
+
+# 2. (可选) 编辑 ~/.config/agent-html-drop/config.toml:设 docroot / public_base_url / port
+
+# 3. 创建 docroot(用户级 / sudo)
+sudo mkdir -p /var/www/notes && sudo chown $USER /var/www/notes
+
+# 4. 生成 nginx server block 示例
+agent-html-drop nginx-config --write
+# 默认写到 ~/.config/agent-html-drop/nginx.conf.example
+
+# 5. 用户拷到 /etc/nginx/sites-available/notes.conf,改 server_name + 证书路径
+sudo cp ~/.config/agent-html-drop/nginx.conf.example /etc/nginx/sites-available/notes.conf
+sudo ln -s /etc/nginx/sites-available/notes.conf /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+
+# 6. 启动 daemon(前台;生产建议 tmux / systemd 用户单元,或 scripts/agent-html-drop.sh start)
+agent-html-drop serve &
+
+# 7. 浏览器打开 https://notes.example.com/ → 直接看到(目前为空)列表
+#    (管理页**不**接触 token:list 是公开元数据,删除/上传只能走 agent MCP)
+```
+
+在本机 agent 侧：
+
+```json
+// Claude Code MCP config: ~/.claude.json (或类似)
+{
+  "mcpServers": {
+    "agent-html-drop": {
+      "url": "https://notes.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <agent-html-drop token show 输出>"
+      }
+    }
+  }
+}
+```
+
+agent 现在可以调 4 个 tool：`upload_html` / `list_html` / `delete_html` / `get_public_url`。
+配合 `yzr-md-to-html` 使用流程：`md2html file.md → upload_html(name="file.html", content=...)`。
+
+## 命令一览
+
+```
+agent-html-drop init [--force]                  # 创建 config + 生成 token
+agent-html-drop serve [--config PATH]           # 前台启动 daemon
+agent-html-drop token show                      # stdout 明文 token(CLI 路径,UI 不再使用)
+agent-html-drop token rotate                    # 重生成(daemon 需重启才生效)
+agent-html-drop config show                     # 打印 config (token 掩码)
+agent-html-drop config path                     # 打印 config 路径
+agent-html-drop config edit                     # $EDITOR 打开 config
+agent-html-drop nginx-config                    # stdout 打印 server block
+agent-html-drop nginx-config --write [PATH]     # 写到 ~/.config/agent-html-drop/nginx.conf.example
+agent-html-drop status                          # 简报:config / token / docroot 状态
+```
+
+服务控制（用户级，无 sudo / systemd 依赖）：
+
+```
+scripts/agent-html-drop.sh start|stop|restart|status    # 或直接 agent-html-drop-service(若已加入 PATH)
+```
+
+> 管理页只读：`GET /` 和 `GET /api/files` 都不鉴权；`DELETE /api/files/<name>` 与
+> `GET /api/nginx-config` 仍要 Bearer（给运维 / 脚本用）；`POST /mcp` 仍要 Bearer
+> （agent 走）。**管理页里不再有 token 输入框，token 也不进 localStorage**——token
+> 只在 server 端 `config.toml` 与本机 agent MCP config 之间手动同步。
+
+## 文件命名 / 大小 / 覆盖规则
+
+- **文件名 regex**：`^[A-Za-z0-9._-]+\.html$`（大小写不敏感匹配 `.html`），≤ 200 字符
+- **大小**：默认上限 50 MB（`config.max_file_size` 可调）
+- **同名上传**：默认 409 + `-32010`；带 `force=true` 才覆盖
+- **公开 URL**：`config.public_base_url + '/' + <name>`
+
+## 设计文档
+
+- 设计：`docs/design.md`
+- 任务书：`docs/tasks.md`
+- brainstorming 决策日志：`docs/2026-08-01-upload-design.md`
+
+## 测试
+
+```bash
+pytest                    # 全量(含 install→serve→MCP→uninstall 冒烟)
+pytest tests/test_cli.py -v
+```
+
+测试隔离：autouse fixture 把 `~/.config/agent-html-drop/` 重定向到 tmp，并在每个测试结束
+校验真实配置目录 mtime 未变——详见 `tests/conftest.py`。
+
+## 局限性
+
+- 不管 nginx 配置 / 不 reload / 不写证书——daemon 只产生 server block 模板，用户自己装
+- 不做 mTLS / OAuth（单 Bearer 静态密钥）
+- 不做多 docroot / 多租户
+- 不存元数据库（title 从 HTML 解析，mtime/size 从 `stat` 取）
+- daemon 保活由用户负责（tmux / systemd 用户单元 / `scripts/agent-html-drop.sh`）
+- 管理页只读：list / 预览 / 复制公开 URL 在浏览器完成；**删除** 与 **上传** 只能通过
+  agent MCP（本机 Claude Code / OpenCode 调 `delete_html` / `upload_html`），管理页
+  故意不做删除按钮 / 上传表单，token 也不在 UI 出现。
+
+## 批注（可选）
+
+管理页支持浏览器侧批注：选中 iframe 中的文本，填评论，提交。批注不影响原始 HTML
+文件（`.html` 与 `.meta` 严格分离），所以可以放心反复修改设计稿，批注留档。
+
+启用方式：
+
+1. 进入批注模式：管理页右上角 **"批注(需 token)"** 按钮 → 弹框 → 粘贴 token
+   （在 server 端跑 `agent-html-drop token show` 获取）→ 进入。
+2. 选中文本 → 弹出评论输入框 → 提交。批注高亮（`<mark>`）自动注入到 iframe。
+3. 退出批注模式：点 "退出" 链接。cookie 30 分钟自动过期。
+
+agent 视角：
+
+- `list_annotations(name)` —— 读取某文件的全部批注（结构化字段）
+- `delete_annotation(name, id)` —— 删除某条（用于清理 spam / 已解决）
+- **不开放** `add_annotation` 给 agent（写批注由浏览器发起）
+
+安全模型：
+
+- 浏览器写批注走短期 session cookie（30 分钟，HttpOnly / Secure / SameSite=Lax）
+- agent 改 HTML 走原有 Bearer token
+- 两条路径**互不重叠**，agent 无批注写接口，浏览器无 HTML 写接口
+- nginx 模板默认带 `limit_req` 防 `/api/auth` 暴力穷举

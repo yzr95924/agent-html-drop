@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agent-html-drop 管理</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>agent-html-drop 管理</h1>
+    <div id="readonly-note" style="font-size:12px;color:var(--fg-dim)">
+      只读浏览 · 删除 / 上传请走 agent MCP（参见 README）
+    </div>
+    <button id="anno-toggle" type="button" aria-label="进入批注模式">批注(需 token)</button>
+    <span id="anno-mode-hint" class="hint" hidden>批注模式 · <a href="#" id="anno-exit">退出</a></span>
+  </header>
+
+  <dialog id="anno-token-dialog" aria-labelledby="anno-token-title">
+    <form method="dialog" id="anno-token-form">
+      <h2 id="anno-token-title">进入批注模式</h2>
+      <p>粘贴 agent-html-drop token(在 server 端跑 <code>agent-html-drop token show</code> 获取)</p>
+      <input id="anno-token-input" type="password" autocomplete="off" />
+      <menu>
+        <button type="button" id="anno-token-cancel">取消</button>
+        <button type="submit" id="anno-token-submit">进入</button>
+      </menu>
+      <p id="anno-token-error" class="error" hidden></p>
+    </form>
+  </dialog>
+
+  <main>
+    <section id="files-section">
+      <h2>文件</h2>
+      <div id="empty-state" hidden>暂无文件 —— 调 MCP <code>upload_html</code> 上传第一篇。</div>
+      <table id="file-table">
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>大小</th>
+            <th>时间</th>
+            <th>公开 URL</th>
+          </tr>
+        </thead>
+        <tbody id="file-tbody"></tbody>
+      </table>
+    </section>
+
+    <section id="preview-section" hidden>
+      <h2>预览 <span id="preview-name"></span></h2>
+      <iframe id="preview-frame" sandbox="allow-same-origin" title="preview"></iframe>
+    </section>
+  </main>
+
+  <aside id="anno-sidebar" aria-label="批注" hidden>
+    <header>
+      <h3 id="anno-sidebar-title">批注</h3>
+      <button id="anno-sidebar-refresh" type="button" aria-label="刷新">↻</button>
+    </header>
+    <ul id="anno-list"></ul>
+    <p id="anno-empty" hidden>暂无批注</p>
+  </aside>
+
+  <div id="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

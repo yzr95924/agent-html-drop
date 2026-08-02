@@ -1,0 +1,12 @@
+# 当前没有发布计划,只保留 pytest 跑测试所需的最小配置。
+# Python 包安装走 scripts/install.sh(用 PYTHONPATH=$REPO/src 直接 import src/),不走 pip。
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# pytest 必须能看到 src/ 与 tests/,这样不需要 venv 里的 .pth 也能 import
+# agent_html_drop 与 tests.conftest。
+pythonpath = ["src", "tests"]
+addopts = "-ra"
+markers = [
+    "no_isolation: opt out of the autouse config-isolation fixture (tests that intentionally exercise real path resolution)",
+]
