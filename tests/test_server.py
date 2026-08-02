@@ -394,8 +394,9 @@ httpd.serve_forever()
         # return) or -SIGTERM (-15, killed by signal before handler ran).
         # In some CI/test environments ThreadingHTTPServer.shutdown() does not
         # wake serve_forever fast enough; the production daemon lifecycle
-        # (scripts/agent-html-drop.sh) handles robustness via SIGKILL after 5s,
-        # so we accept both outcomes here.
+        # (`docker compose`'s `restart: unless-stopped` + Docker's own
+        # SIGKILL after timeout) handles robustness, so we accept both
+        # outcomes here.
         assert proc.returncode == 0 or proc.returncode == -signal.SIGTERM, (
             "unexpected returncode {} (expected 0 or -SIGTERM)".format(
                 proc.returncode

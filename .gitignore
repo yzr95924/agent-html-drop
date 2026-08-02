@@ -217,11 +217,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# agent-html-drop: install.sh writes a thin bash wrapper into ./bin/ on every
-# run (idempotent, templated). Don't track generated artifacts —
-# re-run install.sh after a fresh clone.
-/bin/
-
 # docker-compose persistent volumes live in ./data/ (config.toml + bearer
 # token 0600, docroot HTML + annotations). This is runtime state, not
 # source — recreate with `docker compose up -d` or migrate from another

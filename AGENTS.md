@@ -29,14 +29,11 @@
 ## 常用命令
 
 ```bash
-# 安装 — 走 shell wrapper + PYTHONPATH 路线（不创建 venv，不调用 pip）。
-# 需要 Python 3.7+；Python < 3.11 时请自备 tomli（pip install --user 'tomli>=1.1'）。
-# 同时安装 bash/fish 补全：symlink 到 XDG 补全目录 + ~/.bashrc marker block 内 source 行。
-bash scripts/install.sh
-# 卸载（删 wrapper + 剥 PATH marker + 删补全 symlink；不动 ~/.config/agent-html-drop/ 下的数据）
-bash scripts/uninstall.sh
-# 服务控制（不动 shell rc）：
-scripts/agent-html-drop.sh start|stop|restart|status|install|uninstall
+# 容器化（2026-08-02 起为唯一种部署模式；详见 docs/design.md §15）。
+# daemon 自服务 /files/*、nginx 退化为纯反代；TLS 在边缘 nginx 终结，容器内纯 HTTP。
+docker compose up -d --build                    # 首次自动种 config + token（持久化在 ./data/）
+docker compose exec agent-html-drop agent-html-drop token show   # 取 token（exec 不走 ENTRYPOINT，用 wrapper）
+bash scripts/docker-smoke.sh                    # 容器冒烟（build→/api/health→/files→token，需 docker）
 
 # 测试 — 需要 pytest + pytest-cov 自装（pip install --user pytest pytest-cov）。
 # pyproject.toml 的 [tool.pytest.ini_options].pythonpath 已含 src/，
@@ -53,12 +50,6 @@ agent-html-drop nginx-config                    # 打印 nginx 反代片段到 s
 agent-html-drop nginx-config --write            # 写到 ~/.config/agent-html-drop/nginx.conf.example
 agent-html-drop status                          # config / token / docroot 状态
 ```
-
-# 容器化（Docker，2026-08-02 新增，详见 docs/design.md §15）——叠加部署模式，不替换上面的经典路径。
-# daemon 自服务 /files/*、nginx 退化为纯反代；TLS 在边缘 nginx 终结，容器内纯 HTTP。
-docker compose up -d --build                    # 首次自动种 config + token（持久化在 ./data/）
-docker compose exec agent-html-drop agent-html-drop token show   # 取 token（exec 不走 ENTRYPOINT，用 wrapper）
-bash scripts/docker-smoke.sh                    # 容器冒烟（build→/api/health→/files→token，需 docker）
 
 ## 高层结构
 

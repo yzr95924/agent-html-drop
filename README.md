@@ -176,7 +176,7 @@ agent-html-drop status                          # 简报:config / token / docroo
 服务控制（用户级，无 sudo / systemd 依赖）：
 
 ```
-scripts/agent-html-drop.sh start|stop|restart|status    # 或直接 agent-html-drop-service(若已加入 PATH)
+docker compose start|stop|restart|ps                # 或 docker compose down / up -d
 ```
 
 > 管理页只读：`GET /` 和 `GET /api/files` 都不鉴权；`DELETE /api/files/<name>` 与
@@ -212,7 +212,7 @@ pytest tests/test_cli.py -v
 - 不做 mTLS / OAuth（单 Bearer 静态密钥）
 - 不做多 docroot / 多租户
 - 不存元数据库（title 从 HTML 解析，mtime/size 从 `stat` 取）
-- daemon 保活由用户负责（tmux / systemd 用户单元 / `scripts/agent-html-drop.sh`）
+- daemon 保活由 Docker 负责（`docker-compose.yaml` 里 `restart: unless-stopped`）
 - 管理页只读：list / 预览 / 复制公开 URL 在浏览器完成；**删除** 与 **上传** 只能通过
   agent MCP（本机 Claude Code / OpenCode 调 `delete_html` / `upload_html`），管理页
   故意不做删除按钮 / 上传表单，token 也不在 UI 出现。
