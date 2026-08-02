@@ -172,7 +172,7 @@ def test_upload_html_success(mcp_server):
     assert status == 200
     assert payload["result"]["isError"] is False
     inner = json.loads(payload["result"]["content"][0]["text"])
-    assert inner["url"] == "https://notes.example.com/design.html"
+    assert inner["url"] == "https://notes.example.com/files/design.html"
     assert inner["name"] == "design.html"
     assert inner["size"] > 0
     assert (docroot / "design.html").exists()
@@ -255,7 +255,7 @@ def test_list_html_with_files(mcp_server):
     names = sorted(f["name"] for f in inner["files"])
     assert names == ["a.html", "b.html"]
     for f in inner["files"]:
-        assert f["url"].startswith("https://notes.example.com/")
+        assert f["url"].startswith("https://notes.example.com/files/")
 
 
 # --- tools/call: delete_html -------------------------------------------------
@@ -293,7 +293,7 @@ def test_get_public_url(mcp_server):
         "arguments": {"name": "design.html"},
     })
     inner = json.loads(payload["result"]["content"][0]["text"])
-    assert inner["url"] == "https://notes.example.com/design.html"
+    assert inner["url"] == "https://notes.example.com/files/design.html"
 
 
 def test_get_public_url_does_not_require_file_existence(mcp_server):

@@ -4,7 +4,7 @@ Four endpoints (design §7.3 / §8):
 
   - ``GET /api/files``                Bearer; list docroot
   - ``DELETE /api/files/<name>``      Bearer; delete
-  - ``GET /api/nginx-config``         Bearer; rendered server block
+  - ``GET /api/nginx-config``         Bearer; rendered reverse-proxy snippet
   - ``GET /api/health``               NO AUTH; liveness probe
 
 Each handler is a closure over ``cfg`` (built by ``register_routes``).
@@ -34,6 +34,10 @@ from ._version import VERSION
 
 JSON = {"Content-Type": "application/json"}
 TEXT = {"Content-Type": "text/plain; charset=utf-8"}
+
+# Uniform 404 for the public /files/<name> route — missing / invalid name /
+# traversal all look the same to avoid leaking which names are valid.
+_NOT_FOUND = (404, b"not found\n", TEXT)
 
 
 # --- helpers -----------------------------------------------------------------
@@ -80,7 +84,7 @@ def _file_info_payload(
         "name": f.name,
         "size": f.size,
         "mtime": f.mtime,
-        "url": public_base_url.rstrip("/") + "/" + f.name,
+        "url": public_base_url.rstrip("/") + "/files/" + f.name,
         "title": f.title,
         "annotation_count": anno_store.count(docroot, f.name),
     }
@@ -283,7 +287,6 @@ def _make_nginx_config(cfg: Config):
         if err:
             return err
         text = nginx_mod.render(
-            docroot=cfg.docroot,
             port=cfg.port,
             public_base_url=cfg.public_base_url,
         )
@@ -295,6 +298,38 @@ def _health_handler(req, params, body):
     """No auth — health probes must be reachable without a token."""
     payload = {"status": "ok", "version": VERSION}
     return (200, json.dumps(payload).encode("utf-8"), JSON)
+
+
+def _make_get_file(cfg: Config):
+    """GET /files/<name> — daemon-served public HTML (design §15.3.1).
+
+    Streaming (``Handler.send_file``) + path-traversal-safe
+    (``validate_name`` + resolve-under-docroot). Missing / invalid name /
+    traversal → uniform 404 (no info leak on a public route). No auth —
+    "push = public" trust model (§9.3), same as classic mode's nginx
+    direct-read of /files/*.
+    """
+    docroot = Path(cfg.docroot)
+
+    def handler(req, params, body):
+        name = params.get("name", "")
+        try:
+            storage.validate_name(name)
+        except storage.InvalidName:
+            return _NOT_FOUND
+        # Defense-in-depth: a symlink inside docroot could point outside.
+        base = docroot.resolve()
+        try:
+            target = (docroot / name).resolve()
+            target.relative_to(base)  # raises ValueError if outside docroot
+        except (ValueError, OSError):
+            return _NOT_FOUND
+        if not target.is_file():
+            return _NOT_FOUND
+        req.send_file(str(target), "text/html; charset=utf-8")
+        return (200, srv.STREAMED, {})
+
+    return handler
 
 
 # --- registration ------------------------------------------------------------
@@ -319,3 +354,6 @@ def register_routes(cfg: Config) -> None:
     srv.register("DELETE",
                  r"^/api/files/(?P<name>[^/]+)/annotations/(?P<id>[A-Za-z0-9_-]+)$",
                  _make_delete_annotation(cfg))
+    # Public HTML serving (container mode §15.3.1; classic mode uses nginx
+    # direct-read). Streaming + path-traversal-safe; see _make_get_file.
+    srv.register("GET", r"^/files/(?P<name>[^/]+)$", _make_get_file(cfg))

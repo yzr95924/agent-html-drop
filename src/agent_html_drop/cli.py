@@ -9,7 +9,7 @@ Nine subcommands (design §7.3 / §12):
   config show    print config (token redacted)
   config path    print config path
   config edit    $EDITOR on the config
-  nginx-config   print (or --write) the nginx server block
+  nginx-config   print (or --write) the nginx reverse-proxy snippet
   status         one-line report: config exists / token set / docroot exists
 
 The CLI is a thin orchestrator — every subcommand defers to a focused
@@ -182,7 +182,6 @@ def cmd_nginx_config(args) -> int:
     if args.write is None:
         # Print to stdout.
         print(nginx_mod.render(
-            docroot=cfg.docroot,
             port=cfg.port,
             public_base_url=cfg.public_base_url,
         ))
@@ -191,7 +190,6 @@ def cmd_nginx_config(args) -> int:
     out_path = args.write if args.write else str(paths.nginx_example_file())
     nginx_mod.render_to(
         out_path,
-        docroot=cfg.docroot,
         port=cfg.port,
         public_base_url=cfg.public_base_url,
     )
@@ -269,7 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
     # nginx-config
     p = sub.add_parser(
         "nginx-config",
-        help="Render the bundled nginx server block (stdout or --write).",
+        help="Render the bundled nginx reverse-proxy snippet (stdout or --write).",
     )
     p.add_argument(
         "--write",

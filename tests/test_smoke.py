@@ -296,8 +296,11 @@ def test_nginx_config_smoke(isolated_env):
     )
     assert r.returncode == 0, r.stderr
     text = r.stdout
-    assert "server {" in text
-    assert "listen 443 ssl" in text
+    # Minimal reverse-proxy snippet (§15.3.3): no server{} wrapper / ssl.
+    assert "location /mcp" in text
+    assert "proxy_pass http://127.0.0.1" in text
+    assert "server {" not in text
+    assert "listen 443 ssl" not in text
     assert "{{" not in text  # all placeholders replaced
 
 

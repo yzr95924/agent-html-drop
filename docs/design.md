@@ -8,7 +8,7 @@
 >
 > | 状态 | 作者 | 评审人 | 创建日期 | 更新日期 | 关联需求 / 链接 |
 > | --- | --- | --- | --- | --- | --- |
-> | 草稿 | Zuoru YANG | 待定 | 2026-08-01 | 2026-08-01 | brainstorming 决策日志：[2026-08-01-upload-design.md](./2026-08-01-upload-design.md)；上游 skill：`~/yzr-SKILL/yzr-md-to-html/` |
+> | V1 已实现；容器化扩展草稿 | Zuoru YANG | 待定 | 2026-08-01 | 2026-08-02 | 容器化扩展见 §15；上游 skill：`~/yzr-SKILL/yzr-md-to-html/` |
 
 > **章节分层**：§1–5 **需求层**（不依赖实现：为什么做 / 做什么 / 做成什么样）→ §6–10 **方案层**
 > （怎么做）→ §11–14 **落地层**（怎么拆解执行、怎么上线、何时交付）；§13 开放问题贯穿两层。
@@ -44,7 +44,6 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
 **上下文链接**：
 
 - 仓库规约：[AGENTS.md](../../AGENTS.md)（测试隔离、原子写、未知字段透传、stdlib only）
-- brainstorm 决策日志：[2026-08-01-upload-design.md](./2026-08-01-upload-design.md)
 - yzr-md-to-html：[`~/yzr-SKILL/yzr-md-to-html/SKILL.md`](../../../yzr-SKILL/yzr-md-to-html/SKILL.md)
 
 **假设清单**（评审时逐条确认）：
@@ -75,7 +74,7 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
 - **N2**：不管 nginx 配置 / 不 reload / 不写证书 / 不动 `/etc/`
 - **N3**：不做 mTLS / OAuth / 多 token（单 Bearer 静态密钥）
 - **N4**：不做多 docroot / 多项目（V1 一个 daemon = 一个 docroot）
-- **N5**：不做 systemd unit / Docker image / launchd plist（README 一句 hint）
+- **N5**：不做 systemd unit / launchd plist（README 一句 hint）。~~Docker image~~——**2026-08-02 变更**：新增容器化部署模式（§15），N5 中「Docker image」部分撤销；systemd / launchd 仍不做
 - **N6**：不存元数据库（mtime / size 从 `stat()` 取；title 从 HTML 解析）
 - **N7**：不上传非 `.html` 文件（regex 拒绝）
 - **N8**：不做管理页长期登录 / session；批注写接口用"用户主动出示 token + 短期 cookie"的临时模式，不引入持久身份系统
@@ -137,7 +136,7 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
 - **nginx 限流**：`/api/auth` 与所有批注写接口经 `limit_req zone=auth limit=10r/s` 防暴力穷举；token 256 bit 随机本身已不可能穷举
 - **mtime / size 读取**：`os.stat()` 取
 - **title 解析**：`re.search(r'<title>(.*?)</title>', content, re.DOTALL | re.IGNORECASE)`；解析失败返 `null`
-- **公开 URL**：`public_base_url + '/' + name`（name 不再做 URL encode——regex 已限定安全字符）
+- **公开 URL**：`public_base_url.rstrip('/') + '/files/' + name`（**2026-08-02 变更**：加 `/files/` 路径段，修既有脚枪——原先 `public_base_url + '/' + name` 无 `/files/`，与 nginx `/files/` 路由及前端预览 iframe 不一致，迫使用户把 `/files` 偷偷塞进 `public_base_url`。现 `public_base_url` 语义为「纯 origin」。**迁移**：旧 `public_base_url` 若含 `/files` 需去掉，否则双 `/files/files/`。详见 §15.3.2）（name 不再做 URL encode——regex 已限定安全字符）
 - **MCP 协议**：JSON-RPC 2.0 + Streamable HTTP at `POST /mcp`
 - **管理页**：单文件 `index.html`（vanilla HTML + JS，无第三方运行时依赖）
 - **JSON API**：与 MCP 共用 storage / auth；shape 与 MCP tool 出参保持一致
@@ -151,7 +150,7 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
   - HTTP server 用 stdlib `http.server.ThreadingHTTPServer`
 - **业务约束**：HTML 内容是用户上传给自己的内容，daemon **不解析 / 不执行 / 不隔离 XSS**（信任模型）
 - **兼容约束**：现有 `yzr-agent-tools` 的 `install.sh` / `uninstall.sh` / `completions/` **扩展**而非重写
-- **部署约束**：daemon 监听 `127.0.0.1` only（默认 `8765`）；**不**直接暴露公网
+- **部署约束**：经典模式 daemon 监听 `127.0.0.1` only（默认 `8765`），**不**直接暴露公网；容器模式（§15）daemon 在容器内 bind `0.0.0.0`，compose 以 `127.0.0.1:8765:8765` 发布到宿主 loopback——公网仍不可达，只用户 nginx 可访问
 - **进程约束**：单进程 = 单 daemon；不引入多 worker / 异步框架
 - **可移植约束**：macOS / Linux 行为一致（不依赖 `/proc`、不依赖 systemd）
 
@@ -245,7 +244,7 @@ Bearer 鉴权。
 
 **关键设计决策速览**（每条一句话，细节指 §7 / §10）：
 
-1. **daemon 监听 localhost，由 nginx 反代**——TLS 终结交给 nginx
+1. **daemon 监听 localhost，由 nginx 反代**——TLS 终结交给 nginx（经典模式；容器模式见 §15——daemon 在容器内 bind `0.0.0.0`、由 compose 发布到宿主 loopback，对外形态仍是「nginx 反代 HTTP 到本地端口」）
 2. **单进程 stdlib `http.server.ThreadingHTTPServer`**——满足单用户低并发
 3. **MCP JSON-RPC 自实现 ~150 行**——4 个 tool 需求，SDK overkill
 4. **docroot 是唯一存储，不存元数据**——mtime/size 从 stat 取；title 从 `<title>` 解析
@@ -435,7 +434,7 @@ token: str                 # secrets.token_hex(32); chmod 0600
 | --- | --- | --- | --- |
 | GET | `/api/files` | 无（公开元数据：docroot 文件 nginx 本来就公开 serve） | `{files: [...]}`（同 list_html，含 `annotation_count`） |
 | DELETE | `/api/files/<name>` | Bearer | `{deleted: bool}` |
-| GET | `/api/nginx-config` | Bearer | text/plain（server block） |
+| GET | `/api/nginx-config` | Bearer | text/plain（反代片段，§15.3.3） |
 | GET | `/api/health` | 无 | `{status, version}` |
 | GET | `/` | 无（管理页本身是只读 shell） | HTML |
 | POST | `/mcp` | Bearer | JSON-RPC |
@@ -446,7 +445,7 @@ token: str                 # secrets.token_hex(32); chmod 0600
 | PATCH | `/api/files/<name>/annotations/<id>` | session cookie + CSRF + author 匹配 | `{id, ...}` |
 | DELETE | `/api/files/<name>/annotations/<id>` | session cookie + CSRF + author 匹配 | `{deleted: bool}` |
 
-> 注：`/files/*` 实际**不走 daemon**——nginx 直接从 docroot 读取，daemon 不挂这条路由。
+> 注：经典模式下 `/files/*` **不走 daemon**——nginx 直接从 docroot 读取，daemon 不挂这条路由。**容器模式（§15.3.1）下相反**：daemon 自己服务 `GET /files/<name>`（流式 + 路径穿越防护），nginx 退化为纯反代；两种模式下 `/files/*` 的公开访问语义一致（无 auth，公开 docroot）。
 
 **错误码**：
 
@@ -576,7 +575,7 @@ agent-html-drop status
 - Bearer token 常量时间比较（`hmac.compare_digest`）
 - token 存 `~/.config/agent-html-drop/config.toml`，文件 `chmod 0600`；启动时若权限更宽松则 warning
 - token 在日志中脱敏（`auth.redact_token()` 首 4 / 末 4 + `****`）
-- 所有非 `/files/*` 入口强制 Bearer；`/files/*` 由 nginx 直 serve（**本设计不对 `/files/*` 加 auth**——视为公开 docroot，符合"推送即公开"的 yzr-md-to-html 设计本意）
+- 所有非 `/files/*` 入口强制 Bearer；`/files/*` 公开访问——经典模式由 nginx 直 serve、容器模式（§15.3.1）由 daemon 服务，**两种模式都不对 `/files/*` 加 auth**（视为公开 docroot，符合"推送即公开"的 yzr-md-to-html 设计本意）
 
 **越权防护**：
 
@@ -729,6 +728,17 @@ agent-html-drop status
 | token 泄露 | `agent-html-drop token rotate` → 重启 daemon → 通知 agent 更新 token |
 | nginx 配置写错 reload 失败 | daemon 不感知；修 server block 再 reload；docroot 仍可由 nginx 直 serve |
 
+### 12.1 容器化部署（替代路径，2026-08-02 新增）
+
+经典 §12 之上，容器模式上线序列（详见 §15）：
+
+1. `docker compose up -d`（首次自动种 config + token，挂两 bind mount）
+2. `docker compose exec agent-html-drop token show` 取 token，配给 agent MCP（`url = https://<host>/mcp`）
+3. 把 §15.3.3 的反代片段贴进现有 nginx（`location / { proxy_pass http://127.0.0.1:8765; }` + `/mcp` 流式头），reload
+4. 端到端验证：浏览器开管理页 → agent 上传 → 访问 `https://<host>/files/<name>.html`
+
+容器模式回退：`docker compose down`（`./data/` 保留，数据不丢）；彻底清 = 额外 `rm -rf ./data/`。镜像/daemon 异常靠 compose `restart: unless-stopped` 或外部 monitor 探 `/api/health`。
+
 ## 13. 开放问题
 
 - **Q1**：~~管理页 token 输入框行为~~ ——**已闭环**：管理页不再接触 token。`GET /api/files` 公开（docroot 文件 nginx 本来就公开 serve），管理页无 token 输入框 / 不读 localStorage；删除 / 上传一律走 agent MCP（`POST /mcp` 仍要 Bearer）。`Config.token` 字段、`token show/rotate` CLI 保留（仅给 agent / 运维使用）。**变更日期**：2026-08-01。
@@ -743,6 +753,73 @@ agent-html-drop status
 - **Q10**：nginx `limit_req` 阈值？**默认倾向**：`limit=10r/s`，单 IP 突发 10 次/秒足以挡住脚本狂点又不影响真人手点；burst 20。**待谁确认**：用户 / 评审。
 - **Q11**：iframe sandbox 用 `allow-same-origin` 还是更严？**默认倾向**：`sandbox="allow-same-origin"`——必须允许同源以便主页面注入 `<mark>` 高亮；同时**显式禁止** `allow-scripts`（防 yzr-md-to-html 产物里的 Mermaid/MathJax 在批注 iframe 里执行）。**待谁确认**：用户 / 安全评审。
 
+- **Q12**：~~容器化是否做~~ ——**已闭环（2026-08-02）**：做。方案 A——独立镜像 + 极简 compose（daemon + 两 bind mount 卷）+ 用户自有 nginx 纯反代；不做容器内 nginx / 容器内 TLS。详见 §15。否决了方案 B（compose 捆绑 nginx，与「用我自己的 nginx」相悖）与方案 C（只给 Dockerfile，丢迁移便利）。
+- **Q13**：~~容器化后 `/files/*` 由谁服务~~ ——**已闭环（2026-08-02）**：daemon 自己服务（§15.3.1），容器完全自包含；否决了「nginx 共享 docroot 卷」（把宿主文件系统耦合搬回来，与「任何反代都能 front」相悖）。
+- **Q14**：~~公开 URL 是否修 `/files/` 脚枪~~ ——**已闭环（2026-08-02）**：修。统一为 `<origin>/files/<name>`，带迁移注记（§15.3.2）。
+- **Q15**：~~nginx 模板是否退役~~ ——**已闭环（2026-08-02）**：不退役，重写为极简反代片段、保留 `nginx-config` CLI（§15.3.3）。
+
 ## 14. 排期
 
-内部小项目，无评审排期压力，跳过本节。任务书 [`tasks.md`](./tasks.md) 内 T1–T12 给出粒度。
+内部小项目，无评审排期压力，跳过本节。任务书 [`tasks.md`](./tasks.md) 内 T1–T25 给出粒度。
+
+## 15. 容器化部署（Docker）
+
+> 新增于 2026-08-02。容器化是**叠加的部署模式**，不替换经典模式（§6 / §12 的 daemon + 同机 nginx + nginx 直读 docroot 仍完全可用）。本节只描述容器模式的差异与交付物；除特别注明，§1–14 的设计对两种模式都成立。
+
+### 15.1 目标与范围
+
+把 daemon 打成**自包含 Docker 镜像**，让用户用自己的 nginx 反代 HTTP 到容器端口即可上线；daemon 不依赖容器内 TLS（TLS 在边缘 nginx 终结）。交付物：`Dockerfile` + `docker/entrypoint.sh` + `docker-compose.yml` + 极简反代片段。
+
+非目标（YAGNI）：容器内塞 nginx、容器内 TLS、named volume、多架构构建、每字段 env 覆盖。经典安装路径（`scripts/install.sh`）零影响——容器化是叠加，不替换。
+
+### 15.2 拓扑
+
+```
+浏览器 ──HTTPS──▶ 用户 nginx(终结 TLS) ──HTTP──▶ 容器:8765 (daemon, bind 0.0.0.0)
+                                                       │
+                          ┌────────────────────────────┴──────────┐
+                          │ /mcp  /api/*  /  /files/*  全由 daemon │
+                          │ docroot + config 挂在 /data (bind mount)│
+                          └─────────────────────────────────────────┘
+```
+
+关键转变：**容器外再无任何进程碰 docroot**——nginx 纯反代，docroot 卷只为持久化 + 备份。`Secure` cookie 与 https-only CSRF 在「边缘 HTTPS + 内部 HTTP」下照常工作（浏览器只跟 nginx 讲 HTTPS；nginx→容器那段 HTTP 对浏览器 cookie 语义不可见，CSRF 的 `Origin` 头也由浏览器按边缘 HTTPS 生成，到 daemon 天然对得上）。
+
+### 15.3 代码改动（delta）
+
+**15.3.1 daemon 新增 `GET /files/<name>` 路由。** 复用 `_legacy_storage.validate_name` 做路径穿越防护；命中且文件存在 → 流式输出（分块写 `wfile`，不整文件进内存），`Content-Type: text/html; charset=utf-8`；缺失 / 非法名 / 穿越 → **统一 404**（不区分，避免探测）。原子写保证不读到半写文件。需给 server 加一个「流式响应」小扩展（发完 header 后直接写 body，跳过默认的 bytes 回传路径）。无鉴权——延续「推送即公开」信任模型（§9.3），与经典模式 nginx 直读 `/files/*` 同。
+
+**15.3.2 公开 URL 统一为 `<public_base_url>/files/<name>`（行为变更，2026-08-02）。** 既有矛盾：MCP/API 返回 `public_base_url + "/" + name`（**无 `/files/`**），但前端预览 iframe（`ui/app.js`）与 nginx 都是 `/files/<name>`——要让分享 URL 可达，`public_base_url` 得偷偷带 `/files/`（默认值却没有），是隐藏脚枪。统一改 4 处 URL 构造（`api._file_info_payload` 1 处 + `mcp_handler` 的 upload / list / get_public_url 3 处）为 `public_base_url.rstrip("/") + "/files/" + name`，`public_base_url` 语义清成「纯 origin」。经典模式（nginx 直读 `/files`）与容器模式（daemon 服务 `/files`）由此端到端一致。
+
+> **迁移**：现有用户若把 `public_base_url` 设成了 `https://x/files`，需改成纯 origin（去掉 `/files`），否则会变双 `/files/files/`。
+
+**15.3.3 重写 `assets/nginx.conf.template` 为极简反代片段。** 砍 SSL cert 段与 `location /files/ { alias }`（daemon 自服务了）；保留 `/` 反代、`/mcp` 的 `proxy_buffering off` + 长超时、cookie 透传、`/api/auth` 限流（可选）。`nginx-config` CLI 保留，渲染新模板（端口 + public_base_url 仍替换）。**单一真源 = 模板**：docs 指向它，避免双份漂移。
+
+**15.3.4 监听地址。** 源码默认 `host = "127.0.0.1"` 不改（经典模式沿用）；容器内由 entrypoint 种入的 config 设 `host = "0.0.0.0"`。compose `ports: 127.0.0.1:8765:8765`——容器内 bind `0.0.0.0`，Docker 只发布到宿主 loopback，公网不可达，只用户 nginx 能访问。
+
+### 15.4 容器化交付物
+
+- **`Dockerfile`**：`python:3.12-slim` 基底（源码仍 3.7 兼容，但镜像跑 3.12；3.12 自带 `tomllib`，**零运行时依赖**，无需 `tomli`）；拷 `src/`；非 root 用户；`CMD` 走 entrypoint。
+- **`docker/entrypoint.sh`**：首次运行若 config 缺失 → 用模板 + `secrets.token_hex(32)` 种一份容器友好 config（`host=0.0.0.0` / `port=8765` / `docroot=/data/docroot` / `public_base_url=$PUBLIC_BASE_URL`），建 docroot 目录若缺，再 `exec agent-html-drop serve`；config 已存在则直接 serve（持久 config 优先，env 不覆盖）。
+- **`docker-compose.yml`**：单 `agent-html-drop` 服务 + 两 bind mount + `ports: 127.0.0.1:8765:8765` + `environment: PUBLIC_BASE_URL` + `healthcheck`（探 `/api/health`）。
+- **反代片段**：15.3.3 模板的渲染产物，贴进用户现有 nginx。
+
+### 15.5 数据与卷
+
+| 用途 | 容器内 | 宿主（示例） | 权限 | 备份 |
+| --- | --- | --- | --- | --- |
+| docroot（HTML + 批注 sidecar） | `/data/docroot` | `./data/docroot` | daemon 读写 | `tar`/`rsync`，频繁 |
+| config + token（凭据） | `/data/config`（`XDG_CONFIG_HOME=/data/config` → `…/agent-html-drop/config.toml`） | `./data/config` | `0600` | 按 secret 单独备份 |
+
+两者同属一个父目录 `./data/`，compose 里一个 `volumes:` 块搞定；迁移 = `scp` 整个 `./data/` + compose 文件。首次 `docker compose up` 自动生成 token（持久化在 config 卷），后续 `docker compose exec agent-html-drop token show` 取 token 配给 agent。
+
+> **uid 对齐（部署易踩坑）**：容器以非 root 用户跑，bind mount 的宿主 `./data/` 所有者 uid 需与容器内用户一致（或对该目录放读写权限），否则写 docroot / config 会权限拒绝。compose 用 `user:` 透传或 entrypoint 启动时 `chown` 处理；部署文档须注明——这是 bind mount 的固有限制，named volume 无此问题但失去「宿主直连备份」便利，故仍选 bind mount。
+
+### 15.6 安全模型（沿用 §9.3）
+
+应用层鉴权一条不改：Bearer（MCP + DELETE）、签名批注 cookie、路径穿越 regex、body 上限、cookie 属性（`Secure/HttpOnly/SameSite=Lax`）、CSRF `Origin` 校验——全仍必需，nginx 在不在前面都得有。**唯一变多余的是旧 nginx 模板**（15.3.3 重写处理）。`/files/*` 新增的 daemon 路由同样无 auth，延续「推送即公开」。
+
+### 15.7 测试
+
+- **单元**：`/files/<name>` 路由（存在 → 200 `text/html`、缺失 → 404、穿越 → 404、原子写进行中不泄露半文件）；URL 构造改动后（§15.3.2）相关断言更新。沿用 `tests/conftest.py` 的真实配置保护 fixture。
+- **镜像冒烟**（可选，Docker 在场才跑）：build → run → `curl /api/health` 200 → 上传一个 HTML → `curl /files/x.html` 200。

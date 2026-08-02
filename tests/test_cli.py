@@ -160,8 +160,13 @@ def test_nginx_config_prints_to_stdout(paths_):
     r = invoke(["nginx-config"])
     assert r.exit_code == 0
     text = r.stdout
-    assert "server {" in text
-    assert "listen 443 ssl" in text
+    # Minimal reverse-proxy snippet (§15.3.3): locations + limit_req_zone,
+    # no server{} wrapper, no ssl, no docroot alias.
+    assert "location /mcp" in text
+    assert "proxy_pass http://127.0.0.1" in text
+    assert "limit_req_zone" in text
+    assert "server {" not in text
+    assert "listen 443 ssl" not in text
     assert "{{" not in text  # all placeholders replaced
 
 
@@ -173,7 +178,8 @@ def test_nginx_config_writes_default_path(paths_):
     assert target.exists()
     text = target.read_text()
     assert "{{" not in text
-    assert "server {" in text
+    assert "location /mcp" in text
+    assert "proxy_pass http://127.0.0.1" in text
 
 
 def test_nginx_config_writes_custom_path(paths_):

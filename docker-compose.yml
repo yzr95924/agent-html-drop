@@ -1,0 +1,28 @@
+# agent-html-drop daemon (design §15).
+#
+# Put your own nginx (TLS terminator) in front, reverse-proxying HTTP to
+# 127.0.0.1:8765. Get the nginx snippet with:
+#   docker compose exec agent-html-drop agent-html-drop nginx-config
+#
+# First `up` auto-generates a bearer token, persisted in ./data/config.
+# Retrieve it:
+#   docker compose exec agent-html-drop agent-html-drop token show
+services:
+  agent-html-drop:
+    image: agent-html-drop:latest
+    build: .
+    restart: unless-stopped
+    environment:
+      # Public origin of your deployment; used to render public file URLs.
+      # Set this to your real HTTPS origin.
+      PUBLIC_BASE_URL: "https://notes.example.com"
+    ports:
+      # Publish ONLY to the host loopback — your nginx reaches it, the public
+      # internet cannot. (The daemon binds 0.0.0.0 inside the container.)
+      - "127.0.0.1:8765:8765"
+    volumes:
+      # HTML files + annotation sidecars — your backup target.
+      - ./data/docroot:/data/docroot
+      # config.toml + bearer token (0600) — a credential, back up separately.
+      # Resolves to ./data/config/agent-html-drop/config.toml (XDG convention).
+      - ./data/config:/data/config

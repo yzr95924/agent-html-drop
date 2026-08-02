@@ -77,13 +77,12 @@ agent-html-drop init
 # 3. 创建 docroot(用户级 / sudo)
 sudo mkdir -p /var/www/notes && sudo chown $USER /var/www/notes
 
-# 4. 生成 nginx server block 示例
+# 4. 生成 nginx 反代片段（location 块 + limit_req_zone）
 agent-html-drop nginx-config --write
 # 默认写到 ~/.config/agent-html-drop/nginx.conf.example
 
-# 5. 用户拷到 /etc/nginx/sites-available/notes.conf,改 server_name + 证书路径
-sudo cp ~/.config/agent-html-drop/nginx.conf.example /etc/nginx/sites-available/notes.conf
-sudo ln -s /etc/nginx/sites-available/notes.conf /etc/nginx/sites-enabled/
+# 5. 把这些 location 块贴进你现有 nginx 的 HTTPS server block（TLS/证书是你 nginx 的事，
+#    片段里不再含 ssl/server 包装）；limit_req_zone 那行放 http{} 上下文。然后 reload：
 sudo nginx -t && sudo systemctl reload nginx
 
 # 6. 启动 daemon(前台;生产建议 tmux / systemd 用户单元,或 scripts/agent-html-drop.sh start)
@@ -112,6 +111,41 @@ agent-html-drop serve &
 agent 现在可以调 4 个 tool：`upload_html` / `list_html` / `delete_html` / `get_public_url`。
 配合 `yzr-md-to-html` 使用流程：`md2html file.md → upload_html(name="file.html", content=...)`。
 
+## Docker 部署（容器化）
+
+不想直接装在宿主上？把 daemon 打成自包含镜像，用自己的 nginx 反代 HTTP 到容器端口即可。
+**容器自包含**：daemon 自己服务 `/files/*`，nginx 是纯反代、不碰 docroot；TLS 仍在你的 nginx
+终结（边缘 HTTPS + 内部 HTTP，`Secure` cookie / CSRF 照常工作）。详见 `docs/design.md` §15。
+
+```bash
+# 1. 编辑 docker-compose.yml，把 PUBLIC_BASE_URL 改成你的 HTTPS origin
+# 2. 起服务（首次自动生成 token + config，持久化在 ./data/）
+docker compose up -d --build
+
+# 3. 取 token，配给本机 agent 的 MCP config（url = https://<origin>/mcp）
+docker compose exec agent-html-drop agent-html-drop token show
+
+# 4. 拿 nginx 反代片段，贴进你现有 nginx 的 HTTPS server block，reload
+docker compose exec agent-html-drop agent-html-drop nginx-config
+```
+
+数据与卷（备份 / 迁移就靠这两个目录）：
+
+| 卷 | 容器路径 | 宿主路径 | 用途 |
+| --- | --- | --- | --- |
+| docroot | `/data/docroot` | `./data/docroot` | HTML + 批注——备份目标 |
+| config+token | `/data/config`（→ `…/agent-html-drop/config.toml`） | `./data/config` | 凭据，`0600`，单独备份 |
+
+迁移到另一台机：`scp` 整个 `./data/` + `docker-compose.yml`（+ 重新 build 镜像）即可。
+
+> **uid 对齐**：容器以非 root（uid 1000）运行。若宿主 `./data/` 所有者不是 uid 1000，
+> 写 docroot/config 会权限拒绝——`chown -R 1000:1000 ./data`，或在 compose 里覆盖 `user:`。
+>
+> **`docker exec` 不走 ENTRYPOINT**：跑子命令要用镜像里的 wrapper，即
+> `docker compose exec agent-html-drop agent-html-drop <subcommand>`（service 名与命令名各出现一次）。
+>
+> 容器冒烟测试：`bash scripts/docker-smoke.sh`（需要 docker）。
+
 ## 命令一览
 
 ```
@@ -122,7 +156,7 @@ agent-html-drop token rotate                    # 重生成(daemon 需重启才�
 agent-html-drop config show                     # 打印 config (token 掩码)
 agent-html-drop config path                     # 打印 config 路径
 agent-html-drop config edit                     # $EDITOR 打开 config
-agent-html-drop nginx-config                    # stdout 打印 server block
+agent-html-drop nginx-config                    # stdout 打印反代片段(location 块)
 agent-html-drop nginx-config --write [PATH]     # 写到 ~/.config/agent-html-drop/nginx.conf.example
 agent-html-drop status                          # 简报:config / token / docroot 状态
 ```
@@ -143,13 +177,12 @@ scripts/agent-html-drop.sh start|stop|restart|status    # 或直接 agent-html-d
 - **文件名 regex**：`^[A-Za-z0-9._-]+\.html$`（大小写不敏感匹配 `.html`），≤ 200 字符
 - **大小**：默认上限 50 MB（`config.max_file_size` 可调）
 - **同名上传**：默认 409 + `-32010`；带 `force=true` 才覆盖
-- **公开 URL**：`config.public_base_url + '/' + <name>`
+- **公开 URL**：`<config.public_base_url>/files/<name>`（`public_base_url` 为纯 origin）
 
 ## 设计文档
 
 - 设计：`docs/design.md`
 - 任务书：`docs/tasks.md`
-- brainstorming 决策日志：`docs/2026-08-01-upload-design.md`
 
 ## 测试
 
@@ -163,7 +196,7 @@ pytest tests/test_cli.py -v
 
 ## 局限性
 
-- 不管 nginx 配置 / 不 reload / 不写证书——daemon 只产生 server block 模板，用户自己装
+- 不管 nginx 配置 / 不 reload / 不写证书——daemon 只产生反代片段模板，用户自己装
 - 不做 mTLS / OAuth（单 Bearer 静态密钥）
 - 不做多 docroot / 多租户
 - 不存元数据库（title 从 HTML 解析，mtime/size 从 `stat` 取）

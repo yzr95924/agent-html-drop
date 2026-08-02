@@ -107,7 +107,7 @@ def test_list_files_returns_existing(http_with_api):
     names = sorted(f["name"] for f in payload["files"])
     assert names == ["design.html", "notes.html"]
     for f in payload["files"]:
-        assert f["url"].startswith("https://notes.example.com/")
+        assert f["url"].startswith("https://notes.example.com/files/")
         assert f["size"] > 0
         assert f["title"] is not None
 
@@ -181,8 +181,9 @@ def test_nginx_config_renders(http_with_api):
     assert status == 200
     assert "text/plain" in headers.get("Content-Type", "")
     text = body.decode("utf-8")
-    assert cfg.docroot in text
     assert str(cfg.port) in text
+    assert "proxy_pass http://127.0.0.1:{}".format(cfg.port) in text
+    assert "server {" not in text  # minimal snippet, no server wrapper
 
 
 def test_nginx_config_requires_bearer(http_with_api):

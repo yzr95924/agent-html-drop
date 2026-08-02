@@ -7,7 +7,7 @@
 >
 > | 状态 | 关联设计文档 | 设计版本 | 创建日期 | 最近更新 |
 > | --- | --- | --- | --- | --- |
-> | T1–T12 已验收（V1）；T13+ 进行中（批注扩展） | [`design.md`](./design.md) | V1 + 批注扩展（草稿评审中） | 2026-08-01 | 2026-08-01 |
+> | T1–T12 已验收（V1）；T13–T18 批注扩展；T19–T25 容器化扩展（未开始） | [`design.md`](./design.md) | V1 + 批注 + 容器化（草稿） | 2026-08-01 | 2026-08-02 |
 
 <!-- 本文件"活文档"段与 §3 循环纪律，与 SKILL.md 执行原则「设计 SSOT、任务书活文档」故意重复：
 生成的任务书脱离 skill 给执行者单读，必须自包含。SSOT 在 SKILL.md 执行原则；
@@ -55,6 +55,13 @@
 | T16 | `ui/index.html` + `ui/style.css` + `ui/app.js` 扩展：批注模式入口（header 按钮 + token 弹窗 + 状态切换）+ iframe 选区 → quote + 高亮注入（`<mark data-anno-id>`）+ 批注侧栏 + smoke 测试 | F19, F22, F25 | §7.3, §9.3 | S36, S37, S38, S39 | T7, T14 | 未开始 | 2 天 |
 | T17 | `nginx.conf.template` + README 更新：加 `proxy_cookie_path ... SameSite=Lax` 行 + `limit_req` 注释 + nginx.conf.example | — | §9.3, §12 | S36 | T8, T14 | 未开始 | 半天 |
 | T18 | 端到端 smoke：浏览器进入批注模式 → 写批注 → 高亮 → 改/删 → agent `list_annotations` 看批注改进 HTML | — | §9.3, §12 | S36–S40 全跑一遍 | T13–T17 | 未开始 | 半天 |
+| T19 | daemon `GET /files/<name>` 路由（流式输出 + server 流式响应扩展 + 复用 `validate_name` + 缺失/非法/穿越统一 404）+ 单元测试 | F5, F6 | §15.3.1, §7.3 | S9 | T2, T4 | 待验收 | 1 天 |
+| T20 | 公开 URL 统一加 `/files/` 段（`api._file_info_payload` 1 处 + `mcp_handler` upload/list/get_public_url 3 处 = 共 4 处构造）+ 迁移注记 + 单元测试更新 | F4, F8 | §15.3.2, §4 | S7, S11 | T5, T6 | 待验收 | 半天 |
+| T21 | `assets/nginx.conf.template` 重写为极简反代片段（去 SSL/alias）+ `nginx_config` 渲染 + 单元测试更新 | F13 | §15.3.3, §7.3 | S2, S23 | T8 | 待验收 | 半天 |
+| T22 | `Dockerfile` + `docker/entrypoint.sh` + `.dockerignore`（`python:3.12-slim`，非 root，首次自动种 config + token） | — | §15.4 | 容器启动（新） | T19–T21 | 待验收 | 1 天 |
+| T23 | `docker-compose.yml` + 反代片段 docs（两 bind mount + `ports: 127.0.0.1:8765:8765` + healthcheck） | — | §15.4, §15.5 | compose 部署（新） | T22 | 待验收 | 半天 |
+| T24 | README / AGENTS 容器化章节（部署 / 备份 / 迁移 / token 获取） | — | §15, §12 | — | T22, T23 | 待验收 | 半天 |
+| T25 | 容器冒烟测试（build → run → `/api/health` 200 → 上传 HTML → `/files/x.html` 200） | — | §15.7 | 容器 E2E（新） | T19–T24 | 进行中 | 半天 |
 
 纪律：
 
@@ -199,6 +206,56 @@
   - （待填）
 - 验收：（待填）
 
+### T19 daemon /files/<name> 路由 + 流式响应 + 测试
+
+- 状态：待验收
+- 执行记录：
+  - 2026-08-02 TDD 交付：`server.py` 加 `STREAMED` 哨兵 + `Handler.send_file` 流式方法（64KiB 分块）+ dispatcher 短路；`api.py` 加 `_make_get_file`（复用 `validate_name` + resolve-under-docroot 防穿越，缺失/非法/穿越统一 404）；`tests/test_files_route.py` 8 例全过（含 2MB 流式 round-trip）。
+- 验收：S9（预览 `/files`）由 daemon 服务；全量 257 passed。
+
+### T20 公开 URL 统一 /files/ 段 + 迁移 + 测试
+
+- 状态：待验收
+- 执行记录：
+  - 2026-08-02 TDD 交付：4 处 URL 构造（`api._file_info_payload` + `mcp` upload/list/get_public_url）改 `public_base_url.rstrip("/") + "/files/" + name`，`public_base_url` 语义为「纯 origin」；`test_mcp` 两处精确断言更新、`test_api`/`test_mcp` list 前缀断言收紧到 `/files/`。
+- 验收：迁移注记入 design §4 / §15.3.2（旧 `public_base_url` 含 `/files` 需去掉）；257 passed。
+
+### T21 nginx.conf.template 重写极简反代片段 + 测试
+
+- 状态：待验收
+- 执行记录：
+  - 2026-08-02 TDD 交付：模板重写为纯反代 location 块 + `limit_req_zone`（去 SSL / server 包装 / docroot alias / proxy_cookie_path）；`nginx_config.render/render_to` 删 `docroot` 死参数，cli/api 调用方同步；`test_nginx.py` 重写。连带修 `test_api`/`test_cli`/`test_smoke` 的 nginx-config 断言 + README/AGENTS/design 的「server block」措辞。
+- 验收：单一真源 = 模板；257 passed。
+
+### T22 Dockerfile + entrypoint.sh + .dockerignore
+
+- 状态：待验收
+- 执行记录：
+  - 2026-08-02 交付：`Dockerfile`（`python:3.12-slim`，零运行时依赖，非 root uid 1000，`PYTHONPATH=/app/src`，`XDG_CONFIG_HOME=/data/config`）+ `docker/entrypoint.sh`（首次 serve 用项目自身 `Config`/`save_config` 种容器友好 config + token）+ `.dockerignore` + wrapper `/usr/local/bin/agent-html-drop`（让 `docker exec ... agent-html-drop <cmd>` 可用）。
+  - entrypoint 种 config 逻辑在本机无 docker 下已离线验证：TOML 正确、`load_config`+`validate_for_serve` round-trip 过、perms 0600。
+- 验收：镜像未本机构建（本机无 docker）；bootstrap 逻辑已离线验证，待 T25 实跑。
+
+### T23 docker-compose.yml + 反代片段 docs
+
+- 状态：待验收
+- 执行记录：
+  - 2026-08-02 交付：`docker-compose.yml`（单服务 + 两 bind mount + `127.0.0.1:8765:8765` + `PUBLIC_BASE_URL` env + `restart: unless-stopped`）；反代片段走 `nginx-config` CLI 渲染（单一真源，README 指向 `docker compose exec agent-html-drop agent-html-drop nginx-config`）。
+- 验收：compose 未本机 up（无 docker）。
+
+### T24 README / AGENTS 容器化章节
+
+- 状态：待验收
+- 执行记录：
+  - 2026-08-02 交付：README 加「Docker 部署」章节（部署 / token / nginx 片段 / 卷表 / 迁移 / uid 对齐 / exec 陷阱）+ 修快速上手 step4-5 与公开 URL 公式（T20/T21 连带）；AGENTS.md 加容器化命令块 + `/files` 双模式注记 + nginx-config 措辞。
+- 验收：文档与代码一致。
+
+### T25 容器冒烟测试
+
+- 状态：进行中（脚本已写，本机无 docker 未实跑）
+- 执行记录：
+  - 2026-08-02 交付：`scripts/docker-smoke.sh`（build → `/api/health` 200 → `/files/smoke.html` 200 → token 64-hex；`--user root` 绕开 bind-mount uid）。`bash -n` 语法过。
+- 验收：待在有 docker 的环境实跑 `bash scripts/docker-smoke.sh` 确认。
+
 ## 3. 问题反馈与设计变更
 
 执行中遇到的问题登记在这里——**尤其是"设计本身要改"的问题**：
@@ -213,6 +270,7 @@
 | 日期 | 设计文档变更（章节 + 摘要） | 同步更新的任务 | 操作人 |
 | --- | --- | --- | --- |
 | 2026-08-01 | §1 假设 A3 拆 A3 / A3'(单 token 浏览器+agent 共用)；§2 非目标 N8 改写 + N10 / N11；§3 F19–F25；§4 批注字段 / cookie / CSRF / nginx 限流；§5 S36–S40；§7.2 `.meta` schema；§7.3 `/api/auth` + 批注 REST + MCP `list_annotations` / `delete_annotation`；§8 异常 +5；§9.3 批注写接口安全段；§10 否决 J / K；§13 Q8–Q11 | T13–T18 全新增（§1 §11 段落同步更新） | Zuoru YANG |
+| 2026-08-02 | §2 N5 撤销「Docker image」；§4 公开 URL 加 `/files/` 段（行为变更 + 迁移）+ 部署约束增容器模式；§7.3 / §9.3 `/files` 注记改双模式；§12.1 容器部署路径；§13 Q12–Q15 闭环；新增 §15 容器化设计（拓扑 / delta / 交付物 / 卷 / 安全 / 测试） | T19–T25 全新增 | Zuoru YANG |
 
 循环纪律（偏差回流）：
 

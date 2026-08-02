@@ -1,0 +1,13 @@
+# Keep the image lean — it only needs the source package + entrypoint.
+.git
+.github
+docs/
+tests/
+**/__pycache__
+**/*.pyc
+**/*.pyo
+*.md
+data/
+smoke-data/
+.env
+.gitignore

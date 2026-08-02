@@ -1,8 +1,11 @@
 # AGENTS.md
 
+> **关键**：本文件里凡 `@path/to/file` 形式的引用（如 `@MEMORY/MEMORY.md`），都用 Read 工具按需
+> 读取——它们与你**当前任务**直接相关。不自动展开 `@import` 的 agent 尤须手动执行，否则漏上下文。
+
 ## 项目定位
 
-`agent-html-drop` 是一个常驻 HTTP daemon：让本机 AI coding agent（Claude Code / OpenCode）
+`agent-html-drop` 是一个常驻 HTTP daemon：让本机 AI coding agent
 通过 MCP（Streamable HTTP）把 `yzr-md-to-html` 等产出的自包含 HTML 推到远端 nginx server，
 同时提供一个浏览器管理页（列表 / 预览 / 删除 / 复制公开 URL）与可选的浏览器侧批注。
 
@@ -46,10 +49,16 @@ pytest --cov=agent_html_drop                  # 带覆盖率
 agent-html-drop init                            # 初始化 ~/.config/agent-html-drop/,生成 bearer token
 agent-html-drop serve                           # 前台启动 (Ctrl+C 停);生产建议 tmux / systemd 用户单元
 agent-html-drop token show                      # 打印 token,配到 agent MCP config
-agent-html-drop nginx-config                    # 打印 nginx server block 到 stdout
+agent-html-drop nginx-config                    # 打印 nginx 反代片段到 stdout
 agent-html-drop nginx-config --write            # 写到 ~/.config/agent-html-drop/nginx.conf.example
 agent-html-drop status                          # config / token / docroot 状态
 ```
+
+# 容器化（Docker，2026-08-02 新增，详见 docs/design.md §15）——叠加部署模式，不替换上面的经典路径。
+# daemon 自服务 /files/*、nginx 退化为纯反代；TLS 在边缘 nginx 终结，容器内纯 HTTP。
+docker compose up -d --build                    # 首次自动种 config + token（持久化在 ./data/）
+docker compose exec agent-html-drop agent-html-drop token show   # 取 token（exec 不走 ENTRYPOINT，用 wrapper）
+bash scripts/docker-smoke.sh                    # 容器冒烟（build→/api/health→/files→token，需 docker）
 
 ## 高层结构
 
@@ -83,7 +92,7 @@ daemon 监听 `127.0.0.1:8765`（默认），由 nginx 在前面 HTTPS 反代 + 
 - `POST /mcp` —— MCP Streamable HTTP（agent 走这里，`Authorization: Bearer <token>` 强制）
 - `GET /` —— HTML 管理页（浏览器，只读；批注模式走 session cookie）
 - `* /api/*` —— JSON API（管理页背后；DELETE 等写操作仍要 Bearer）
-- `/files/*` —— nginx 直接从 docroot 读取（daemon 不参与）
+- `/files/*` —— 经典模式 nginx 直接从 docroot 读取；**容器模式（§15.3.1）由 daemon 自服务**（流式 + 路径穿越防护），nginx 退化为纯反代。两种模式都无 auth（公开 docroot）
 
 MCP 工具（`tools/call`）：`upload_html` / `list_html` / `delete_html` / `get_public_url`
 / `list_annotations` / `delete_annotation`。MCP 协议自实现，无第三方 SDK 依赖。

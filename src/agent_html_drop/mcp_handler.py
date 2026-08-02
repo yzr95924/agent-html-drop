@@ -197,7 +197,7 @@ def _impl_upload_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
         force=force,
     )
     payload = {
-        "url": cfg.public_base_url.rstrip("/") + "/" + info.name,
+        "url": cfg.public_base_url.rstrip("/") + "/files/" + info.name,
         "name": info.name,
         "size": info.size,
     }
@@ -214,7 +214,7 @@ def _impl_list_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
                 "name": f.name,
                 "size": f.size,
                 "mtime": f.mtime,
-                "url": cfg.public_base_url.rstrip("/") + "/" + f.name,
+                "url": cfg.public_base_url.rstrip("/") + "/files/" + f.name,
                 "title": f.title,
                 "annotation_count": anno_store.count(docroot, f.name),
             }
@@ -240,7 +240,7 @@ def _impl_get_public_url(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
     if not isinstance(name, str):
         raise ValueError("name must be a string")
     # No filesystem check — this tool is meant to preview URL pre-upload.
-    url = cfg.public_base_url.rstrip("/") + "/" + name
+    url = cfg.public_base_url.rstrip("/") + "/files/" + name
     return _tool_result(json.dumps({"url": url}))
 
 

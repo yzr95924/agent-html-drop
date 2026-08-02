@@ -28,6 +28,12 @@ Route = Tuple[str, "re.Pattern[str]", Handler]
 # Module-level route registry. Populated by cli.serve at startup.
 routes: List[Route] = []
 
+# Sentinel a handler returns as ``body`` when it has already streamed the
+# response itself (headers + chunks written directly to ``wfile``). The
+# dispatcher then skips the default bytes-body response. Used by the
+# /files/<name> route so large HTML need not be loaded whole into memory.
+STREAMED = object()
+
 
 def register(method: str, pattern: str, handler: Handler) -> None:
     """Register ``handler`` for ``method`` + path regex ``pattern``.
@@ -134,6 +140,11 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
+        # A handler may stream the body itself (e.g. GET /files/<name>) by
+        # sending its own headers + chunks and returning STREAMED as the
+        # body — skip the default bytes response in that case.
+        if resp_body is STREAMED:
+            return
         self._respond(status, resp_body, headers)
 
     # -- body -------------------------------------------------------------
@@ -169,6 +180,26 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if body:
             self.wfile.write(body)
+
+    def send_file(self, path: str, content_type: str) -> None:
+        """Stream a file to the client in chunks (used by /files/<name>).
+
+        Sends 200 + Content-Type + Content-Length (from stat), then writes
+        the body in 64 KiB chunks so a large HTML file never has to be
+        loaded whole into memory. The caller then returns ``STREAMED`` so
+        the dispatcher skips the default bytes-body response.
+        """
+        size = os.stat(path).st_size
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(size))
+        self.end_headers()
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
 
     # -- logging ----------------------------------------------------------
 
