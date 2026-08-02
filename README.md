@@ -157,6 +157,80 @@ agent-html-drop config show                     # 打印 config (token 掩码)
 agent-html-drop config path                     # 打印 config 路径
 agent-html-drop config edit                     # $EDITOR 打开 config
 agent-html-drop nginx-config                    # stdout 打印反代片段(location 块)
+
+## 查询 token
+
+token 是 daemon 的凭据，不会出现在管理页 UI / localStorage（设计原则）。
+所有查询都走 CLI。两条路径：
+
+**Classic（直接装在宿主）**
+
+```bash
+# 明文，打印到 stdout —— 复制粘贴给 agent 的 MCP config
+agent-html-drop token show
+
+# Masked（首 4 + **** + 末 4），日常检查 token 是否设置推荐
+agent-html-drop config show
+
+# 生成新 token（旧 token 立刻作废，需重启 daemon 才生效）
+agent-html-drop token rotate
+```
+
+**Docker（容器化部署）**
+
+`exec` 不走 ENTRYPOINT，必须用镜像里的 wrapper —— `agent-html-drop` 在命令里出现两次是正常的：
+
+```bash
+# 明文
+docker compose exec agent-html-drop agent-html-drop token show
+
+# 或
+docker exec <container_name> agent-html-drop token show
+
+# 容器内的 config（含 masked token）
+docker compose exec agent-html-drop agent-html-drop config show
+```
+
+> **安全提示**：完整 token 会进 shell history / 终端快照 / 屏幕录制。
+> 日常查看优先用 `config show`（自动 masked）。想批量管理凭据可：
+> `chmod 600 ~/.bash_history`、设 `HISTCONTROL=ignorespace`（命令前加空格不进 history）、
+> 或临时 `unset HISTFILE` 再跑。
+
+## Docker 常用命令
+
+集中在这一节，避免翻各处凑。**`compose exec` 一定要写两遍 `agent-html-drop`**（service 名 + 命令名）—— 这是 exec 不走 ENTRYPOINT 的代价。
+
+```bash
+# —— 起停 ——
+docker compose up -d --build       # 首次：构建镜像 + 后台启动
+docker compose up -d               # 已有镜像：直接启动
+docker compose restart             # 重启容器（卷 / config 保留）
+docker compose down                # 停 + 删容器（卷 ./data 保留）
+docker compose down --volumes      # ⚠️ 连 ./data 一起删——会丢 token + 所有 HTML
+
+# —— 状态 / 日志 ——
+docker compose ps                  # 容器状态
+docker compose logs -f --tail 50   # 实时跟踪最近 50 行
+docker compose logs agent-html-drop  # 只看 daemon 输出
+
+# —— 取凭据 / 片段 ——
+docker compose exec agent-html-drop agent-html-drop token show     # 明文 token
+docker compose exec agent-html-drop agent-html-drop config show    # masked token
+docker compose exec agent-html-drop agent-html-drop nginx-config   # nginx location 块
+docker compose exec agent-html-drop agent-html-drop status         # config/token/docroot 状态
+
+# —— 调试 / 验证 ——
+docker compose exec agent-html-drop sh                             # 进容器 shell
+docker compose exec agent-html-drop ls -la /data                   # 看持久化卷
+bash scripts/docker-smoke.sh                                       # 一键冒烟：build → /api/health → /files → token
+```
+
+**常见踩坑**
+
+- 容器跑一会变 `Restarting`：当前版本（v0.1.0 之前）有此 bug，已修复；升级镜像即可。
+- `exec` 报 "executable file not found"：写漏了第二个 `agent-html-drop`。
+- 改了 `docker-compose.yml` 但没生效：要 `docker compose up -d`（不是 `restart`）。
+- `data/` 权限拒绝：容器以 uid 1000 跑，`chown -R 1000:1000 ./data` 对齐。
 agent-html-drop nginx-config --write [PATH]     # 写到 ~/.config/agent-html-drop/nginx.conf.example
 agent-html-drop status                          # 简报:config / token / docroot 状态
 ```
