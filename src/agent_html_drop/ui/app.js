@@ -109,8 +109,10 @@
         tdTime.textContent = fmtTime(f.mtime);
 
         var tdUrl = document.createElement("td");
-        tdUrl.style.fontFamily = "ui-monospace, monospace";
-        tdUrl.style.fontSize = "12px";
+        // Inherit body's system UI font (rounded on macOS / Windows / Linux)
+        // instead of monospace — the URL is for copy-paste, not code reading.
+        tdUrl.style.wordBreak = "break-all";
+        tdUrl.style.fontSize = "13px";
         tdUrl.appendChild(document.createTextNode(f.url + " "));
         var copyBtn = document.createElement("button");
         copyBtn.textContent = "复制";

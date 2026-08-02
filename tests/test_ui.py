@@ -133,6 +133,28 @@ def test_app_js_handles_401_as_version_mismatch(ui_server):
     assert "版本" in text or "version" in text.lower()
 
 
+def test_url_column_uses_ui_font_not_monospace():
+    """Regression: 公开 URL 列应该用系统 UI 字体（圆润），不是 monospace。
+
+    URL 是给用户复制粘贴的，不是读代码；monospace + 12px 让整列看起来
+    "硬"且偏小。body 已经设了 -apple-system / Segoe UI / system-ui，
+    td 默认继承。tdUrl 上不要再写 monospace。
+    """
+    text = open(os.path.join(ui_mod._UI_DIR, "app.js"), encoding="utf-8").read()
+    idx = text.find("var tdUrl = document.createElement")
+    assert idx >= 0, "tdUrl 渲染逻辑不见了"
+    # 精确检测：只看 tdUrl.style.fontFamily 这一行（注释里出现"monospace"
+    # 这个单词不应误判）
+    font_lines = [
+        ln for ln in text[idx:idx + 800].splitlines()
+        if "tdUrl.style.fontFamily" in ln
+    ]
+    assert not any("monospace" in ln for ln in font_lines), (
+        "tdUrl.style.fontFamily 设成了 monospace；URL 列应该继承 body "
+        "的圆润 UI 字体。被检测到: {!r}".format(font_lines)
+    )
+
+
 def test_app_js_uses_clipboard_for_copy(ui_server):
     _, _, body = _get(ui_server, "/app.js")
     text = body.decode("utf-8")
