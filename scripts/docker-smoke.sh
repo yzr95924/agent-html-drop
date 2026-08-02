@@ -31,7 +31,7 @@ for _ in $(seq 1 40); do
   if curl -sf "http://127.0.0.1:${HOST_PORT}/api/health" >/dev/null 2>&1; then break; fi
   sleep 0.5
 done
-curl -sf "http://127.0.0.1:${HOST_PORT}/api/health" | grep -q '"status":"ok"'
+curl -sf "http://127.0.0.1:${HOST_PORT}/api/health" | grep -Eq '"status":[[:space:]]*"ok"'
 echo "   health OK"
 
 echo ">> probing daemon-served /files/<name>"
