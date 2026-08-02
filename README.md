@@ -27,67 +27,11 @@
 
 - **daemon 监听 `127.0.0.1` only**——由 nginx 在前面 HTTPS 反代 + 终结 TLS
 - **单进程 stdlib `http.server.ThreadingHTTPServer`**——无第三方运行时依赖
-- **MCP Streamable HTTP 自实现 ~150 行**——4 个 tool，无 MCP SDK
+- **MCP Streamable HTTP 自实现 ~150 行**——6 个 tool，无 MCP SDK
 
-## 安装
+## Docker 部署
 
-```bash
-bash scripts/install.sh    # 装 wrapper + bash/fish 补全,扩展 PATH marker
-source ~/.bashrc
-agent-html-drop --help
-```
-
-> stdlib-only 依赖——Python ≥ 3.7，<3.11 时自备 `tomli>=1.1`。
-
-## 快速上手（在远端 nginx server 上）
-
-```bash
-# 1. 初始化
-agent-html-drop init
-# 输出一段 token,记下来(或 `agent-html-drop token show` 重看)
-
-# 2. (可选) 编辑 ~/.config/agent-html-drop/config.toml:设 docroot / public_base_url / port
-
-# 3. 创建 docroot(用户级 / sudo)
-sudo mkdir -p /var/www/notes && sudo chown $USER /var/www/notes
-
-# 4. 生成 nginx 反代片段（location 块 + limit_req_zone）
-agent-html-drop nginx-config --write
-# 默认写到 ~/.config/agent-html-drop/nginx.conf.example
-
-# 5. 把这些 location 块贴进你现有 nginx 的 HTTPS server block（TLS/证书是你 nginx 的事，
-#    片段里不再含 ssl/server 包装）；limit_req_zone 那行放 http{} 上下文。然后 reload：
-sudo nginx -t && sudo systemctl reload nginx
-
-# 6. 启动 daemon(前台;生产建议 tmux / systemd 用户单元,或 scripts/agent-html-drop.sh start)
-agent-html-drop serve &
-
-# 7. 浏览器打开 https://notes.example.com/ → 直接看到(目前为空)列表
-#    (管理页**不**接触 token:list 是公开元数据,删除/上传只能走 agent MCP)
-```
-
-在本机 agent 侧：
-
-```json
-// Claude Code MCP config: ~/.claude.json (或类似)
-{
-  "mcpServers": {
-    "agent-html-drop": {
-      "url": "https://notes.example.com/mcp",
-      "headers": {
-        "Authorization": "Bearer <agent-html-drop token show 输出>"
-      }
-    }
-  }
-}
-```
-
-agent 现在可以调 4 个 tool：`upload_html` / `list_html` / `delete_html` / `get_public_url`。
-配合 `yzr-md-to-html` 使用流程：`md2html file.md → upload_html(name="file.html", content=...)`。
-
-## Docker 部署（容器化）
-
-不想直接装在宿主上？把 daemon 打成自包含镜像，用自己的 nginx 反代 HTTP 到容器端口即可。
+把 daemon 打成自包含镜像，用自己的 nginx 反代 HTTP 到容器端口。
 **容器自包含**：daemon 自己服务 `/files/*`，nginx 是纯反代、不碰 docroot；TLS 仍在你的 nginx
 终结（边缘 HTTPS + 内部 HTTP，`Secure` cookie / CSRF 照常工作）。详见 `docs/design.md` §15。
 
@@ -119,6 +63,26 @@ docker compose exec agent-html-drop agent-html-drop nginx-config
 > `docker compose exec agent-html-drop agent-html-drop <subcommand>`（service 名与命令名各出现一次）。
 >
 > 容器冒烟测试：`bash scripts/docker-smoke.sh`（需要 docker）。
+
+容器起来后，在本机 agent 侧配 MCP：
+
+```json
+// Claude Code MCP config: ~/.claude.json (或类似)
+{
+  "mcpServers": {
+    "agent-html-drop": {
+      "url": "https://<origin>/mcp",
+      "headers": {
+        "Authorization": "Bearer <docker compose exec agent-html-drop agent-html-drop token show 输出>"
+      }
+    }
+  }
+}
+```
+
+agent 可以调 6 个 tool：`upload_html` / `list_html` / `delete_html` / `get_public_url`
+/ `list_annotations` / `delete_annotation`。
+配合 `yzr-md-to-html` 使用流程：`md2html file.md → upload_html(name="file.html", content=...)`。
 
 ## 命令一览
 
