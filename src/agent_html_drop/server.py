@@ -16,6 +16,7 @@ import re
 import signal
 import socketserver
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -231,12 +232,20 @@ def install_signal_shutdown(server: ThreadingHTTPServer, *, grace_seconds: int =
     A SIGALRM watchdog (default 5s) hard-exits if ``serve_forever`` hasn't
     returned by then. This guards against Python 3.12+ ``shutdown()`` not
     waking ``serve_forever`` immediately on every platform.
+
+    The watchdog arms ONLY once a shutdown signal fires — never at install
+    time. (Arming eagerly caused the daemon to self-exit 5s after start,
+    which made Docker ``restart: unless-stopped`` loop forever.) Call
+    ``cancel_shutdown_watchdog()`` from the main thread once
+    ``serve_forever`` returns cleanly, so a stale alarm can't fire later.
     """
     def _shutdown(*_):
-        try:
-            server.shutdown()
-        except Exception:
-            pass
+        # shutdown() must run off the main thread (signal-handler thread is
+        # the main thread); calling it here would self-deadlock against
+        # serve_forever. Arm the watchdog at the same moment so a hung
+        # shutdown still has an escape hatch.
+        signal.alarm(grace_seconds)
+        threading.Thread(target=server.shutdown, daemon=True).start()
 
     def _hard_exit(*_):
         # Best-effort: close the listening socket so serve_forever wakes,
@@ -248,8 +257,12 @@ def install_signal_shutdown(server: ThreadingHTTPServer, *, grace_seconds: int =
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
-    # Watchdog: if graceful path didn't return in time, force exit. The
-    # alarm self-cancels once serve_forever returns and the main thread
-    # clears it.
     signal.signal(signal.SIGALRM, _hard_exit)
-    signal.alarm(grace_seconds)
+
+
+def cancel_shutdown_watchdog() -> None:
+    """Cancel any pending SIGALRM. Call from the main thread after
+    ``serve_forever`` returns cleanly, so the watchdog can only fire when
+    a real shutdown is in progress.
+    """
+    signal.alarm(0)

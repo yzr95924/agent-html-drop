@@ -244,6 +244,105 @@ def test_body_too_large_carries_length_and_cap():
 
 # --- signal shutdown --------------------------------------------------------
 
+def test_install_signal_shutdown_does_not_arm_alarm_at_install(monkeypatch):
+    """`install_signal_shutdown` must NOT arm SIGALRM at install time.
+
+    Regression for the Docker restart-loop bug: arming the alarm eagerly
+    caused the daemon to self-exit 5s after startup, regardless of whether
+    any shutdown signal had been received. The watchdog should only arm
+    once a shutdown signal actually arrives.
+    """
+    from agent_html_drop import server as srv_mod
+
+    calls = []  # type: list  # populated by spy
+
+    def fake_alarm(seconds):
+        calls.append(seconds)
+        # Don't actually arm a real alarm (test takes <1s).
+        return 0
+
+    # Build a real server so server.shutdown() is callable from a thread.
+    routes.clear()
+    srv = make_server("127.0.0.1", 0, quiet=True)
+    try:
+        monkeypatch.setattr(srv_mod.signal, "alarm", fake_alarm)
+
+        srv_mod.install_signal_shutdown(srv, grace_seconds=5)
+
+        assert calls == [], (
+            "install_signal_shutdown armed SIGALRM at install time: "
+            "signal.alarm was called with {!r}; daemon would self-exit "
+            "after grace_seconds even with no shutdown signal.".format(calls)
+        )
+    finally:
+        srv.server_close()
+        routes.clear()
+
+
+def test_install_signal_shutdown_arms_alarm_on_sigterm(monkeypatch):
+    """When SIGTERM fires, the watchdog SIGALRM must arm.
+
+    Companion to the install-time test: asserts that the watchdog arm
+    happens inside the shutdown handler, not at install. We trigger the
+    handler directly (avoids waiting on real signals).
+    """
+    from agent_html_drop import server as srv_mod
+
+    calls = []  # type: list
+
+    def fake_alarm(seconds):
+        calls.append(seconds)
+        return 0
+
+    routes.clear()
+    srv = make_server("127.0.0.1", 0, quiet=True)
+    try:
+        monkeypatch.setattr(srv_mod.signal, "alarm", fake_alarm)
+        srv_mod.install_signal_shutdown(srv, grace_seconds=5)
+
+        assert calls == [], "alarm armed at install (should be deferred)"
+
+        # Capture and invoke the installed SIGTERM handler.
+        handler = signal.getsignal(signal.SIGTERM)
+        assert callable(handler), "SIGTERM handler not installed"
+
+        # Drive shutdown from another thread — the spec says the handler
+        # must NOT call server.shutdown() on the main thread (it would
+        # self-deadlock against serve_forever).
+        done = threading.Event()
+        t = threading.Thread(target=lambda: (handler(), done.set()), daemon=True)
+        t.start()
+        done.wait(timeout=2.0)
+
+        assert calls, "alarm not armed when SIGTERM fired"
+        # Last arm should be the grace_seconds we configured.
+        assert calls[-1] == 5
+    finally:
+        srv.server_close()
+        routes.clear()
+
+
+def test_cancel_shutdown_watchdog_disarms_alarm(monkeypatch):
+    """`cancel_shutdown_watchdog()` cancels a pending SIGALRM.
+
+    `serve_forever` returns cleanly without a signal → cli must call
+    this so no stale alarm fires later (e.g. during shutdown RPCs).
+    """
+    from agent_html_drop import server as srv_mod
+
+    calls = []  # type: list
+
+    def fake_alarm(seconds):
+        calls.append(seconds)
+        return 0
+
+    monkeypatch.setattr(srv_mod.signal, "alarm", fake_alarm)
+    srv_mod.cancel_shutdown_watchdog()
+
+    # alarm(0) cancels any pending alarm.
+    assert 0 in calls, "cancel_shutdown_watchdog should call signal.alarm(0)"
+
+
 def test_sigterm_watchdog_exits_process(monkeypatch):
     """SIGTERM should end serve_forever within grace_seconds (default 5).
 

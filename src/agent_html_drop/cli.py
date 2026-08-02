@@ -102,6 +102,10 @@ def cmd_serve(args) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        # Cancel the watchdog first — `server_close()` can take a moment
+        # if a handler is mid-request, and we don't want SIGALRM firing
+        # during teardown.
+        srv.cancel_shutdown_watchdog()
         server.server_close()
     return 0
 
