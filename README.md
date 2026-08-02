@@ -4,9 +4,6 @@
 （`yzr-md-to-html` 等工具的产物）推到远端 nginx server，同时提供一个 HTML 管理页供人浏览 /
 预览 / 删除 / 复制公开 URL。
 
-> 本服务前身为 `yzr-agent-tools` 仓库里的 `html-mcp`，2026-08 起独立成单工具仓库并更名
-> `agent-html-drop`。从旧部署迁移见下方「从 html-mcp 迁移」。
-
 ## 形态
 
 ```
@@ -41,29 +38,6 @@ agent-html-drop --help
 ```
 
 > stdlib-only 依赖——Python ≥ 3.7，<3.11 时自备 `tomli>=1.1`。
-
-## 从 html-mcp 迁移
-
-旧版（`yzr-agent-tools` 仓库的 `html-mcp`）已部署的机器：
-
-```bash
-# 1. 停旧 daemon(在旧仓库里)
-html-mcp-service stop    # 或 scripts/html-mcp.sh stop
-
-# 2. 搬配置(token / docroot / port 全部保留)
-mv ~/.config/html-mcp ~/.config/agent-html-drop
-
-# 3. 装新版
-cd ~/agent-html-drop && bash scripts/install.sh && source ~/.bashrc
-
-# 4. 起新 daemon
-agent-html-drop-service start   # 或 scripts/agent-html-drop.sh start
-```
-
-nginx server block、docroot、公开 URL 均不变；本机 agent 侧 MCP config 里的
-`url` / `Authorization` 头也不变（server 名 `html-mcp` → `agent-html-drop` 只是显示名，
-改不改都行）。旧仓库侧的 wrapper 可用 `yzr-agent-tools` 旧拷贝里的
-`scripts/html-mcp.sh uninstall` 卸掉。
 
 ## 快速上手（在远端 nginx server 上）
 
