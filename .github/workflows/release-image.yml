@@ -13,7 +13,7 @@
 #
 # First-time setup: after the first push, the GHCR package is created
 # private. Manually flip it to public at
-# https://github.com/<owner>/agent-html-drop/settings/packages
+# https://github.com/yzr95924/agent-html-drop/settings/packages
 # Subsequent pushes inherit visibility.
 
 name: release-image

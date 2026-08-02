@@ -31,7 +31,7 @@
 
 ## Docker 部署
 
-镜像发布在 `ghcr.io/<owner>/agent-html-drop`（多架构 linux/amd64 + linux/arm64）。
+镜像发布在 `ghcr.io/yzr95924/agent-html-drop`（多架构 linux/amd64 + linux/arm64）。
 `docker compose up -d` 会自动从 GHCR 拉取已发布版本，**不需要本地 build**。
 `docker-compose.yaml` 里的 `image:` 字段指向带版本 tag（默认 `:v0.1.0`），不会随 `:latest`
 静默换版。想本地重建：在 compose 里去掉 `image:` 前面的 `#` 注释并取消 `build: .` 注释。
@@ -41,9 +41,7 @@
 终结（边缘 HTTPS + 内部 HTTP，`Secure` cookie / CSRF 照常工作）。详见 `docs/design.md` §15。
 
 ```bash
-# 1. 编辑 docker-compose.yaml：
-#    a. 把 ghcr.io/<owner>/agent-html-drop:v0.1.0 的 <owner> 改成你的 GitHub 用户名
-#    b. 把 PUBLIC_BASE_URL 改成你的 HTTPS origin
+# 1. 编辑 docker-compose.yaml：把 PUBLIC_BASE_URL 改成你的 HTTPS origin
 # 2. 起服务（首次自动生成 token + config，持久化在 ./data/）
 docker compose up -d
 
@@ -206,7 +204,7 @@ docker compose start|stop|restart|ps                # 或 docker compose down / 
 ## 发布新版本（维护者）
 
 发布流水线：push 一个 `v*` tag → GitHub Actions 自动 buildx 多架构构建（amd64 + arm64）
-→ push 到 `ghcr.io/<owner>/agent-html-drop` → post-publish smoke（pull + 起容器 + `/api/health`）。
+→ push 到 `ghcr.io/yzr95924/agent-html-drop` → post-publish smoke（pull + 起容器 + `/api/health`）。
 详见 `docs/design.md` §16 / `.github/workflows/release-image.yml`。
 
 ```bash
@@ -215,13 +213,13 @@ docker compose start|stop|restart|ps                # 或 docker compose down / 
 git tag v0.2.0
 git push --tags
 
-# 3. 看 CI：https://github.com/<owner>/agent-html-drop/actions/workflows/release-image.yml
+# 3. 看 CI：https://github.com/yzr95924/agent-html-drop/actions/workflows/release-image.yml
 # 4. 镜像 tag 矩阵：v0.2.0, 0.2, 0.2.0, latest, sha-<short>
 #    全部指向同一 manifest list（多架构自动挑）
 ```
 
 **首次发布**：GHCR 包默认创建为 private。push 后去
-<https://github.com/<owner>/agent-html-drop/settings/packages> 改成 public，
+<https://github.com/yzr95924/agent-html-drop/settings/packages> 改成 public，
 否则别人 `docker pull` 不到。
 
 **失败回滚**：如果 smoke 失败但镜像已推，workflow 标红 ✗ 但镜像留在 GHCR——手动到包页面删

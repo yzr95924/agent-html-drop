@@ -833,7 +833,7 @@ agent-html-drop status
 
 | 维度 | 选择 | 理由 |
 |---|---|---|
-| Registry | GHCR (`ghcr.io/<owner>/agent-html-drop`) | 与 GitHub repo 绑定；`GITHUB_TOKEN` 内置 `packages:write`；公开包匿名 pull 无硬限 |
+| Registry | GHCR (`ghcr.io/yzr95924/agent-html-drop`) | 与 GitHub repo 绑定；`GITHUB_TOKEN` 内置 `packages:write`；公开包匿名 pull 无硬限 |
 | 受众 | 公开 | README 直接给 `docker compose up` 即可用，无登录门槛 |
 | 触发 | `v*` git tag push | 不可变标签，发布即定型，避免 commit 噪声触发构建浪费 CI 配额 |
 | Tag 矩阵 | `vX.Y.Z` / `X.Y` / `X.Y.Z` / `latest` / `sha-<short>` | `latest` 仅 default branch 上打（防 RC 污染） |
@@ -883,7 +883,7 @@ push v0.1.0 tag
    agent-html-drop:
 -    image: agent-html-drop:latest
 -    build: .
-+    image: ghcr.io/<owner>/agent-html-drop:v0.1.0
++    image: ghcr.io/yzr95924/agent-html-drop:v0.1.0
 +    # build: .    # 取消注释即可本地 build 覆盖 image
 ```
 
@@ -891,7 +891,7 @@ push v0.1.0 tag
 
 - `image:` 指向**带版本 tag**（不写 `:latest`），避免被悄悄换
 - 删 `build:` 让 compose 默认走 pull（Docker Compose 行为：`image` + `build` 同时存在时 `build` 优先——保留 `build:` 会让 pull 失效）
-- `<owner>` 占位符第一次发版前维护者手动替换为真实 GitHub username
+- fork 用户自行替换 `yzr95924` 为自己的 GitHub username / org
 - 容器内行为 / 端口 / 卷定义完全不变——对现有部署不破坏的兼容性改动
 
 ### 16.4 scripts/docker-smoke.sh 改造
@@ -918,7 +918,7 @@ push v0.1.0 tag
 |---|---|
 | workflow 文件存在且 YAML 合法 | git push 触发 GitHub Actions schema 校验 |
 | `v0.1.0` tag push 后 GHCR 上有镜像 | push 后访问包页面看到 5 个标签（`v0.1.0` / `0.1` / `0.1.0` / `latest` / `sha-*`） |
-| manifest list 同时支持 amd64 + arm64 | `docker buildx imagetools inspect ghcr.io/<owner>/agent-html-drop:v0.1.0` 输出含两个平台 |
+| manifest list 同时支持 amd64 + arm64 | `docker buildx imagetools inspect ghcr.io/yzr95924/agent-html-drop:v0.1.0` 输出含两个平台 |
 | post-publish smoke 通过 | workflow 日志显示 `/api/health` 200、文件读写、token 64-hex |
 | 别人 clone repo + `docker compose up -d` 起得来 | 干净容器 / 干净机器手测（不需要 build） |
 | 现有 pytest 全过 | `pytest` 不变 |

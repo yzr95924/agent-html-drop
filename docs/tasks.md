@@ -264,7 +264,8 @@
   - 2026-08-03 交付：
     - `.github/workflows/release-image.yml`：trigger `push tags: 'v*'`；`docker/metadata-action@v5` 派生 5 tag 矩阵（`vX.Y.Z` / `X.Y` / `X.Y.Z` / `latest`（仅 default branch） / `sha-<short>`）；`docker/build-push-action@v6` 推 `linux/amd64 + linux/arm64` manifest list；`cache-from: type=gha` + `cache-to: type=gha,mode=max`；post-publish 跑 `scripts/docker-smoke.sh`（`SMOKE_IMAGE` env 路径）。
     - `scripts/docker-smoke.sh`：加 `SMOKE_IMAGE` 环境变量分支——设置时走 `docker pull`，默认仍走 `docker build`（本地开发）。`bash -n` 语法过。
-    - `docker-compose.yaml`：`image: agent-html-drop:latest` → `image: ghcr.io/<owner>/agent-html-drop:v0.1.0`；`build: .` 注释掉；顶部注释说明发布镜像来源 + `<owner>` 替换提示 + 本地重建开关。
+    - `docker-compose.yaml`：`image: agent-html-drop:latest` → `image: ghcr.io/yzr95924/agent-html-drop:v0.1.0`；`build: .` 注释掉；顶部注释说明发布镜像来源 + 本地重建开关。
+    - 同次提交把所有 `<owner>` 占位符批量替换为 `yzr95924`（覆盖 `docker-compose.yaml` / `README.md` / `docs/design.md` §16 / `docs/tasks.md` T26 log / workflow 注释）；fork 用户自行替换。
     - `README.md`：`Docker 部署` 段加 GHCR 说明 + `docker compose up`（无 `--build`）；新增 `## 发布新版本（维护者）` 段（tag 命令 + CI 流程 + 首次 public 切换 + 失败回滚）。
     - `docs/design.md`：新增 §16（决策表 + workflow 流程 + compose diff + 范围外 + 验收）。
 - 验收：

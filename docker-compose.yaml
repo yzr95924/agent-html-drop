@@ -1,11 +1,11 @@
 # agent-html-drop daemon (design §15).
 #
-# Image: published at ghcr.io/<owner>/agent-html-drop. `docker compose up`
+# Image: published at ghcr.io/yzr95924/agent-html-drop. `docker compose up`
 # pulls the published image; no local build required.
 #
-# Replace `<owner>` with the GitHub username / org that owns this repo
-# and bump the tag to the release you want. The first time you deploy,
-# follow README "Docker 部署" end-to-end.
+# Forking? Change `yzr95924` to your own GitHub username / org and bump
+# the tag to the release you want. The first time you deploy, follow
+# README "Docker 部署" end-to-end.
 #
 # Put your own nginx (TLS terminator) in front, reverse-proxying HTTP to
 # 127.0.0.1:8765. Get the nginx snippet with:
@@ -20,7 +20,7 @@
 services:
   agent-html-drop:
     # Pin a specific tag so silent :latest bumps don't break you.
-    image: ghcr.io/<owner>/agent-html-drop:v0.1.0
+    image: ghcr.io/yzr95924/agent-html-drop:v0.1.0
     # build: .
     restart: unless-stopped
     environment:
