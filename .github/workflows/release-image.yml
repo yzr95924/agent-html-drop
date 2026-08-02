@@ -1,0 +1,75 @@
+# Image release pipeline for agent-html-drop.
+#
+# Triggers on `v*` git tag push. Builds a multi-arch (amd64 + arm64)
+# container image, pushes to GitHub Container Registry (ghcr.io), and
+# runs a post-publish smoke test.
+#
+# Tag matrix (derived by docker/metadata-action):
+#   vX.Y.Z    immutable, full git tag
+#   X.Y       immutable, floating major.minor
+#   X.Y.Z     immutable, full semver (alias of vX.Y.Z)
+#   latest    mutable, only on default branch
+#   sha-XXXX  immutable, debug
+#
+# First-time setup: after the first push, the GHCR package is created
+# private. Manually flip it to public at
+# https://github.com/<owner>/agent-html-drop/settings/packages
+# Subsequent pushes inherit visibility.
+
+name: release-image
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # docker/metadata-action needs full git history
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v6
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/agent-html-drop
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}.{{minor}}.{{patch}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: post-publish smoke
+        # Pulls the just-published image and runs the existing
+        # scripts/docker-smoke.sh against it. Runs on CI's amd64 only;
+        # arm64 manifest is validated by the build step (cross-build).
+        env:
+          SMOKE_IMAGE: ghcr.io/${{ github.repository_owner }}/agent-html-drop:${{ steps.meta.outputs.version }}
+        run: bash scripts/docker-smoke.sh

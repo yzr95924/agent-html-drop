@@ -1,22 +1,30 @@
 #!/usr/bin/env bash
 # Container smoke test for agent-html-drop (design §15.7).
 #
-# Requires docker. Builds the image, runs it, and probes:
+# Requires docker. Builds (or pulls) the image, runs it, and probes:
 #   - GET /api/health  -> 200 {"status":"ok"}
 #   - GET /files/<name> -> 200 + body (daemon serves /files/* itself)
 #   - token bootstrap   -> 64-hex token retrievable in-container
 #
-# Run: bash scripts/docker-smoke.sh
+# Run modes:
+#   bash scripts/docker-smoke.sh              # build local image
+#   SMOKE_IMAGE=ghcr.io/...:tag bash ...      # pull specified image
+#                                            # (used by CI post-publish smoke)
 set -euo pipefail
 
-IMG=ahd-smoke:latest
+IMG="${SMOKE_IMAGE:-ahd-smoke:latest}"
 HOST_PORT=18765
 CID=ahd-smoke
 DATA_DIR="$(mktemp -d)"
 trap 'docker rm -f "$CID" >/dev/null 2>&1 || true; rm -rf "$DATA_DIR"' EXIT
 
-echo ">> building image"
-docker build -q -t "$IMG" .
+if [[ -n "${SMOKE_IMAGE:-}" ]]; then
+  echo ">> pulling image: $IMG"
+  docker pull --quiet "$IMG" >/dev/null
+else
+  echo ">> building image"
+  docker build -q -t "$IMG" .
+fi
 
 echo ">> running container (exercises root→ahd privilege drop + /files self-service)"
 docker run -d --name "$CID" \

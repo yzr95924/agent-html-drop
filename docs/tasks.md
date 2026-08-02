@@ -7,7 +7,7 @@
 >
 > | 状态 | 关联设计文档 | 设计版本 | 创建日期 | 最近更新 |
 > | --- | --- | --- | --- | --- |
-> | T1–T12 已验收（V1）；T13–T18 批注扩展；T19–T25 容器化扩展（未开始） | [`design.md`](./design.md) | V1 + 批注 + 容器化（草稿） | 2026-08-01 | 2026-08-02 |
+> | T1–T12 已验收（V1）；T13–T18 批注扩展；T19–T25 容器化扩展（待验收 / 进行中）；T26 镜像发布流水线（进行中） | [`design.md`](./design.md) | V1 + 批注 + 容器化 + 镜像发布 | 2026-08-01 | 2026-08-03 |
 
 <!-- 本文件"活文档"段与 §3 循环纪律，与 SKILL.md 执行原则「设计 SSOT、任务书活文档」故意重复：
 生成的任务书脱离 skill 给执行者单读，必须自包含。SSOT 在 SKILL.md 执行原则；
@@ -62,6 +62,7 @@
 | T23 | `docker-compose.yaml` + 反代片段 docs（两 bind mount + `ports: 127.0.0.1:8765:8765` + healthcheck） | — | §15.4, §15.5 | compose 部署（新） | T22 | 待验收 | 半天 |
 | T24 | README / AGENTS 容器化章节（部署 / 备份 / 迁移 / token 获取） | — | §15, §12 | — | T22, T23 | 待验收 | 半天 |
 | T25 | 容器冒烟测试（build → run → `/api/health` 200 → 上传 HTML → `/files/x.html` 200） | — | §15.7 | 容器 E2E（新） | T19–T24 | 进行中 | 半天 |
+| T26 | 镜像发布流水线：GHCR + GitHub Actions（`v*` tag 触发 + 多架构 amd64/arm64 + 5 tag 矩阵 + post-publish smoke）；`docker-compose.yaml` 改 `image:` 走 pull；README 新增发布新版本章节 | — | §16 | 别人 clone repo 后 `docker compose up` 不需要本地 build | T25 | 进行中 | 半天 |
 
 纪律：
 
@@ -256,6 +257,22 @@
   - 2026-08-02 交付：`scripts/docker-smoke.sh`（build → `/api/health` 200 → `/files/smoke.html` 200 → token 64-hex；`--user root` 绕开 bind-mount uid）。`bash -n` 语法过。
 - 验收：待在有 docker 的环境实跑 `bash scripts/docker-smoke.sh` 确认。
 
+### T26 镜像发布流水线（GHCR + GitHub Actions）
+
+- 状态：进行中（代码已交付，待第一次 `v*` tag push 触发 CI）
+- 执行记录：
+  - 2026-08-03 交付：
+    - `.github/workflows/release-image.yml`：trigger `push tags: 'v*'`；`docker/metadata-action@v5` 派生 5 tag 矩阵（`vX.Y.Z` / `X.Y` / `X.Y.Z` / `latest`（仅 default branch） / `sha-<short>`）；`docker/build-push-action@v6` 推 `linux/amd64 + linux/arm64` manifest list；`cache-from: type=gha` + `cache-to: type=gha,mode=max`；post-publish 跑 `scripts/docker-smoke.sh`（`SMOKE_IMAGE` env 路径）。
+    - `scripts/docker-smoke.sh`：加 `SMOKE_IMAGE` 环境变量分支——设置时走 `docker pull`，默认仍走 `docker build`（本地开发）。`bash -n` 语法过。
+    - `docker-compose.yaml`：`image: agent-html-drop:latest` → `image: ghcr.io/<owner>/agent-html-drop:v0.1.0`；`build: .` 注释掉；顶部注释说明发布镜像来源 + `<owner>` 替换提示 + 本地重建开关。
+    - `README.md`：`Docker 部署` 段加 GHCR 说明 + `docker compose up`（无 `--build`）；新增 `## 发布新版本（维护者）` 段（tag 命令 + CI 流程 + 首次 public 切换 + 失败回滚）。
+    - `docs/design.md`：新增 §16（决策表 + workflow 流程 + compose diff + 范围外 + 验收）。
+- 验收：
+  - workflow YAML 合法（`yaml.safe_load` 过）
+  - `bash scripts/docker-smoke.sh` 语法过（不实跑）
+  - 现有 258 个 pytest 仍通过
+  - 实际 CI 验收需 push 第一个 `v0.1.0` tag 后看 Actions 跑通——本机无 docker / 不动真实 tag
+
 ## 3. 问题反馈与设计变更
 
 执行中遇到的问题登记在这里——**尤其是"设计本身要改"的问题**：
@@ -271,6 +288,7 @@
 | --- | --- | --- | --- |
 | 2026-08-01 | §1 假设 A3 拆 A3 / A3'(单 token 浏览器+agent 共用)；§2 非目标 N8 改写 + N10 / N11；§3 F19–F25；§4 批注字段 / cookie / CSRF / nginx 限流；§5 S36–S40；§7.2 `.meta` schema；§7.3 `/api/auth` + 批注 REST + MCP `list_annotations` / `delete_annotation`；§8 异常 +5；§9.3 批注写接口安全段；§10 否决 J / K；§13 Q8–Q11 | T13–T18 全新增（§1 §11 段落同步更新） | Zuoru YANG |
 | 2026-08-02 | §2 N5 撤销「Docker image」；§4 公开 URL 加 `/files/` 段（行为变更 + 迁移）+ 部署约束增容器模式；§7.3 / §9.3 `/files` 注记改双模式；§12.1 容器部署路径；§13 Q12–Q15 闭环；新增 §15 容器化设计（拓扑 / delta / 交付物 / 卷 / 安全 / 测试） | T19–T25 全新增 | Zuoru YANG |
+| 2026-08-03 | 新增 §16 镜像发布流水线（GHCR + GitHub Actions 多架构 + tag 矩阵 + post-publish smoke；范围外列 cosign / SBOM / Trivy 等 v2 增强） | T26 全新增 | Zuoru YANG |
 
 循环纪律（偏差回流）：
 

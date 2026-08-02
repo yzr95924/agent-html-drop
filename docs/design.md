@@ -823,3 +823,103 @@ agent-html-drop status
 
 - **单元**：`/files/<name>` 路由（存在 → 200 `text/html`、缺失 → 404、穿越 → 404、原子写进行中不泄露半文件）；URL 构造改动后（§15.3.2）相关断言更新。沿用 `tests/conftest.py` 的真实配置保护 fixture。
 - **镜像冒烟**（可选，Docker 在场才跑）：build → run → `curl /api/health` 200 → 上传一个 HTML → `curl /files/x.html` 200。
+
+## 16. 镜像发布流水线（2026-08-03 新增）
+
+> 让任何 clone repo 的人 `docker compose up -d` 就能用，不需要本地 build。把 §15
+> 的 `Dockerfile` 镜像推到 GHCR，由 GitHub Actions 在 tag push 时自动 buildx 多架构构建。
+
+### 16.1 决策
+
+| 维度 | 选择 | 理由 |
+|---|---|---|
+| Registry | GHCR (`ghcr.io/<owner>/agent-html-drop`) | 与 GitHub repo 绑定；`GITHUB_TOKEN` 内置 `packages:write`；公开包匿名 pull 无硬限 |
+| 受众 | 公开 | README 直接给 `docker compose up` 即可用，无登录门槛 |
+| 触发 | `v*` git tag push | 不可变标签，发布即定型，避免 commit 噪声触发构建浪费 CI 配额 |
+| Tag 矩阵 | `vX.Y.Z` / `X.Y` / `X.Y.Z` / `latest` / `sha-<short>` | `latest` 仅 default branch 上打（防 RC 污染） |
+| 架构 | `linux/amd64` + `linux/arm64` | 覆盖 x86 服务器 / Apple Silicon / AWS Graviton |
+| CI | GitHub Actions + `GITHUB_TOKEN` | 零额外 secret；与 repo 同托管；cache 加速 rebuild |
+| 安全/签名 | 暂不加 | Python stdlib SBOM 薄、CVE 面窄；cosign 签名留作 v2 |
+| Dockerfile | 不改 | 官方 `python:3.12-slim` 多架构 + `gosu` 多架构 + shell entrypoint 架构无关 |
+| Compose | 改 `image:`、删 `build:` | 不破坏现有部署（已是发布的 `vX.Y.Z` tag） |
+
+### 16.2 工作流
+
+`.github/workflows/release-image.yml`（trigger: `push tags: 'v*'`）：
+
+```
+push v0.1.0 tag
+  │
+  ├─ actions/checkout@v4 (fetch-depth: 0)
+  ├─ docker/setup-qemu-action@v3
+  ├─ docker/setup-buildx-action@v6
+  ├─ docker/login-action@v3 → ghcr.io + GITHUB_TOKEN
+  ├─ docker/metadata-action@v5
+  │     ├ type=semver,pattern={{version}}                       → :v0.1.0
+  │     ├ type=semver,pattern={{major}}.{{minor}}              → :0.1
+  │     ├ type=semver,pattern={{major}}.{{minor}}.{{patch}}    → :0.1.0
+  │     ├ type=raw,value=latest,enable={{is_default_branch}}    → :latest
+  │     └ type=sha,format=short                                → :sha-abc1234
+  ├─ docker/build-push-action@v6
+  │     platforms=linux/amd64,linux/arm64
+  │     push=true
+  │     cache-from=type=gha
+  │     cache-to=type=gha,mode=max
+  │     provenance=false
+  └─ bash scripts/docker-smoke.sh (SMOKE_IMAGE=...:${{ steps.meta.outputs.version }})
+        └─ 拉镜像 → 起容器 → /api/health 200 → /files/x.html 200 → token 64-hex
+```
+
+**post-publish smoke**：
+
+- CI runner 是 `ubuntu-latest / amd64`，所以**只验证 amd64 manifest**
+- arm64 manifest 由 build 阶段验证通过，本地 M-series / Graviton 手验
+- smoke 失败处理：workflow 标红 ✗；镜像仍留 GHCR（不自动删——避免误删正在用的）；维护者发 patch tag 覆盖或手动到 GHCR 包页面删
+
+### 16.3 docker-compose.yaml 改动
+
+```diff
+ services:
+   agent-html-drop:
+-    image: agent-html-drop:latest
+-    build: .
++    image: ghcr.io/<owner>/agent-html-drop:v0.1.0
++    # build: .    # 取消注释即可本地 build 覆盖 image
+```
+
+要点：
+
+- `image:` 指向**带版本 tag**（不写 `:latest`），避免被悄悄换
+- 删 `build:` 让 compose 默认走 pull（Docker Compose 行为：`image` + `build` 同时存在时 `build` 优先——保留 `build:` 会让 pull 失效）
+- `<owner>` 占位符第一次发版前维护者手动替换为真实 GitHub username
+- 容器内行为 / 端口 / 卷定义完全不变——对现有部署不破坏的兼容性改动
+
+### 16.4 scripts/docker-smoke.sh 改造
+
+加 `SMOKE_IMAGE` 环境变量支持：
+
+- 默认行为不变（`docker build -q -t ahd-smoke:latest .`）——本地开发自测
+- CI post-publish 设置 `SMOKE_IMAGE=ghcr.io/.../...:vX.Y.Z`，脚本走 `docker pull` 路径
+
+### 16.5 范围外（v1 不做）
+
+- cosign 镜像签名（keyless via Sigstore Fulcio）
+- SBOM 生成（anchore/sbom-action）
+- Trivy CVE 扫描
+- Docker Hub mirror
+- `:edge` 标签（main 分支每次 push 自动 build）
+- `:rc` 系列预发布标签（实际已支持：`v0.2.0-rc.1` tag 会自动产生 `:v0.2.0-rc.1` / `:0.2.0-rc.1` 标签，但不会打 `:latest`）
+
+任何一项后续单独设计实施，不阻塞 v1 发布。
+
+### 16.6 验收
+
+| 标准 | 测法 |
+|---|---|
+| workflow 文件存在且 YAML 合法 | git push 触发 GitHub Actions schema 校验 |
+| `v0.1.0` tag push 后 GHCR 上有镜像 | push 后访问包页面看到 5 个标签（`v0.1.0` / `0.1` / `0.1.0` / `latest` / `sha-*`） |
+| manifest list 同时支持 amd64 + arm64 | `docker buildx imagetools inspect ghcr.io/<owner>/agent-html-drop:v0.1.0` 输出含两个平台 |
+| post-publish smoke 通过 | workflow 日志显示 `/api/health` 200、文件读写、token 64-hex |
+| 别人 clone repo + `docker compose up -d` 起得来 | 干净容器 / 干净机器手测（不需要 build） |
+| 现有 pytest 全过 | `pytest` 不变 |
+| README 把安装步骤更新到「clone + 编辑 compose + up」 | 文档审阅 |
