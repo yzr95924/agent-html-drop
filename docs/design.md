@@ -813,7 +813,7 @@ agent-html-drop status
 
 两者同属一个父目录 `./data/`，compose 里一个 `volumes:` 块搞定；迁移 = `scp` 整个 `./data/` + compose 文件。首次 `docker compose up` 自动生成 token（持久化在 config 卷），后续 `docker compose exec agent-html-drop token show` 取 token 配给 agent。
 
-> **uid 对齐（部署易踩坑）**：容器以非 root 用户跑，bind mount 的宿主 `./data/` 所有者 uid 需与容器内用户一致（或对该目录放读写权限），否则写 docroot / config 会权限拒绝。compose 用 `user:` 透传或 entrypoint 启动时 `chown` 处理；部署文档须注明——这是 bind mount 的固有限制，named volume 无此问题但失去「宿主直连备份」便利，故仍选 bind mount。
+> **uid 对齐（entrypoint 特权降级自愈）**：镜像不带 `USER` 指令，entrypoint 以 root 启动，先 `chown -R 1000:1000 /data` 把 bind mount 的宿主 `./data/` 属主对齐到容器内 app uid（1000），再 `exec gosu ahd` 降权跑 daemon。**宿主 `./data/` 无论原属谁都直接能写，部署无需手动改属主**，daemon 进程本身始终非 root（gosu 装在镜像里）。这是 bind mount 的固有限制（named volume 无此问题但失去「宿主直连备份」便利），用 entrypoint 特权降级消化，而非把坑留给部署者。
 
 ### 15.6 安全模型（沿用 §9.3）
 

@@ -18,9 +18,8 @@ trap 'docker rm -f "$CID" >/dev/null 2>&1 || true; rm -rf "$DATA_DIR"' EXIT
 echo ">> building image"
 docker build -q -t "$IMG" .
 
-echo ">> running container (root, to side-step bind-mount uid in a throwaway test)"
+echo ">> running container (exercises root→ahd privilege drop + /files self-service)"
 docker run -d --name "$CID" \
-  --user root \
   -p "127.0.0.1:${HOST_PORT}:8765" \
   -e "PUBLIC_BASE_URL=http://localhost:${HOST_PORT}" \
   -v "${DATA_DIR}:/data" \

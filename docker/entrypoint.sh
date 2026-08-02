@@ -7,7 +7,18 @@
 # TOML is always well-formed and written atomically at 0600. The config lives
 # under $XDG_CONFIG_HOME (=/data/config) so it persists on the bind-mounted
 # ./data/config volume. Then exec the daemon.
+#
+# Privilege drop (§15.5): the image has no USER directive, so this starts as
+# root. It chowns /data to the app uid, then re-execs itself as non-root
+# `ahd` via gosu; the re-invoked copy skips the block below (id -u != 0) and
+# runs the seed + daemon as ahd. Net: ./data works for any host-side owner,
+# and the daemon never runs as root.
 set -e
+
+if [ "$(id -u)" = "0" ]; then
+    chown -R 1000:1000 /data
+    exec gosu ahd "$0" "$@"
+fi
 
 if [ "$1" = "serve" ] || [ $# -eq 0 ]; then
     mkdir -p "${AHD_DOCROOT:-/data/docroot}"
