@@ -221,3 +221,9 @@ __marimo__/
 # run (idempotent, templated). Don't track generated artifacts —
 # re-run install.sh after a fresh clone.
 /bin/
+
+# docker-compose persistent volumes live in ./data/ (config.toml + bearer
+# token 0600, docroot HTML + annotations). This is runtime state, not
+# source — recreate with `docker compose up -d` or migrate from another
+# host via `scp` (see README §Docker).
+/data/

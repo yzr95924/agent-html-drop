@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 
-# Filename policy (matches agent-html-drop-design.md §4).
+# Filename policy (matches docs/design.md §4).
 # IGNORECASE: `.html`, `.HTML`, `.Html` all valid. Character class
 # `[A-Za-z0-9._-]` already covers the body.
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.html$", re.IGNORECASE)
