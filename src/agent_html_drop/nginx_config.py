@@ -15,7 +15,6 @@ gone with it.
 Design §7.3 / §12 / §15.3.3.
 """
 import os
-from typing import Optional
 
 
 _HERE = os.path.dirname(__file__)

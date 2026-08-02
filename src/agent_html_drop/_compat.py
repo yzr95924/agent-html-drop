@@ -1,9 +1,8 @@
 """TOML parsing/dumping for agent-html-drop.
 
-Mirrors `model_switch/_compat.py` but kept as a separate module so each
-tool in this repo has its own self-contained runtime surface — a
-yzr-agent-tools convention. The dumper is hand-written because neither
-`tomllib` (3.11+) nor `tomli` (<3.11) has a write API.
+The dumper is hand-written because neither `tomllib` (3.11+) nor
+`tomli` (<3.11) has a write API. The loader prefers stdlib ``tomllib``
+and falls back to ``tomli``.
 """
 import io
 from typing import Any, Dict

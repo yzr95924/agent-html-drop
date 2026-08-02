@@ -14,7 +14,6 @@ Design §7.1.1 / §7.3 / §8:
 import os
 import re
 import signal
-import socketserver
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

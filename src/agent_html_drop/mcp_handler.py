@@ -5,9 +5,10 @@ Supports the three methods Claude Code actually uses against an MCP
 server:
 
   - ``initialize``              — protocol handshake (returns server info)
-  - ``tools/list``              — return the 4 tools' schemas
+  - ``tools/list``              — return the 6 tools' schemas
   - ``tools/call``              — dispatch to upload / list / delete /
-                                  get_public_url
+                                  get_public_url / list_annotations /
+                                  delete_annotation
 
 Bearer auth on every request (design §7.3). Errors map to JSON-RPC
 codes (with custom -32001 for unauthorized).
@@ -20,16 +21,15 @@ from typing import Any, Dict, Tuple
 from agent_html_drop import _legacy_storage as storage
 from agent_html_drop.auth import check_bearer
 from agent_html_drop.config import Config
+from agent_html_drop.storage import annotations as anno_store
 
 from ._version import VERSION
-
 
 JSON = {"Content-Type": "application/json"}
 SERVER_INFO = {
     "name": "agent-html-drop",
     "version": VERSION,
 }
-
 
 # --- tool schemas (advertised via tools/list) ------------------------------
 
@@ -128,7 +128,6 @@ TOOL_SCHEMAS = [
     },
 ]
 
-
 # --- error helpers -----------------------------------------------------------
 
 def _err(code: int, message: str, request_id: Any = None) -> Dict[str, Any]:
@@ -138,10 +137,8 @@ def _err(code: int, message: str, request_id: Any = None) -> Dict[str, Any]:
         "error": {"code": code, "message": message},
     }
 
-
 def _ok(result: Any, request_id: Any) -> Dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
-
 
 def _tool_result(text: str, is_error: bool = False) -> Dict[str, Any]:
     """Wrap a tool result in MCP's content envelope."""
@@ -149,7 +146,6 @@ def _tool_result(text: str, is_error: bool = False) -> Dict[str, Any]:
         "content": [{"type": "text", "text": text}],
         "isError": is_error,
     }
-
 
 def _storage_code(exc: storage.StorageError) -> int:
     """Map a storage exception to an MCP error code."""
@@ -165,7 +161,6 @@ def _storage_code(exc: storage.StorageError) -> int:
         return -32020
     return -32603
 
-
 def _error_class_name(exc: storage.StorageError) -> str:
     """Convert a storage exception class name to snake_case format."""
     name = exc.__class__.__name__
@@ -177,7 +172,6 @@ def _error_class_name(exc: storage.StorageError) -> str:
         else:
             result += char.lower()
     return result
-
 
 # --- tool implementations ---------------------------------------------------
 
@@ -203,9 +197,7 @@ def _impl_upload_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
     }
     return _tool_result(json.dumps(payload))
 
-
 def _impl_list_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
-    from agent_html_drop.storage import annotations as anno_store
     docroot = Path(cfg.docroot)
     files = storage.list_files(docroot)
     payload = {
@@ -223,7 +215,6 @@ def _impl_list_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
     }
     return _tool_result(json.dumps(payload))
 
-
 def _impl_delete_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
     name = args.get("name")
     if not isinstance(name, str):
@@ -234,7 +225,6 @@ def _impl_delete_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
         raise storage.NotFound("file does not exist: {}".format(name))
     return _tool_result(json.dumps({"deleted": True}))
 
-
 def _impl_get_public_url(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
     name = args.get("name")
     if not isinstance(name, str):
@@ -243,9 +233,7 @@ def _impl_get_public_url(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
     url = cfg.public_base_url.rstrip("/") + "/files/" + name
     return _tool_result(json.dumps({"url": url}))
 
-
 def _impl_list_annotations(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
-    from agent_html_drop.storage import annotations as anno_store
     name = args.get("name")
     if not isinstance(name, str):
         raise ValueError("name must be a string")
@@ -256,9 +244,7 @@ def _impl_list_annotations(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
     entries = anno_store.list_for(docroot, name)
     return _tool_result(json.dumps({"name": name, "annotations": entries}, ensure_ascii=False))
 
-
 def _impl_delete_annotation(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
-    from agent_html_drop.storage import annotations as anno_store
     name = args.get("name")
     id_ = args.get("id")
     if not isinstance(name, str) or not isinstance(id_, str):
@@ -273,7 +259,6 @@ def _impl_delete_annotation(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]
     anno_store.save(docroot, name, doc)
     return _tool_result(json.dumps({"deleted": True}))
 
-
 _TOOL_DISPATCH = {
     "upload_html": _impl_upload_html,
     "list_html": _impl_list_html,
@@ -283,7 +268,6 @@ _TOOL_DISPATCH = {
 
 _TOOL_DISPATCH["list_annotations"] = _impl_list_annotations
 _TOOL_DISPATCH["delete_annotation"] = _impl_delete_annotation
-
 
 # --- JSON-RPC dispatch ------------------------------------------------------
 
@@ -437,13 +421,11 @@ def handle(req, params, body: bytes, cfg: Config) -> Tuple[int, bytes, Dict[str,
             JSON,
         )
 
-
 def make_handler(cfg: Config):
     """Return a closure matching the server's Handler signature."""
     def _h(req, params, body):
         return handle(req, params, body, cfg)
     return _h
-
 
 def register_route(cfg: Config) -> None:
     """Register ``POST /mcp`` on the server registry."""

@@ -1,11 +1,22 @@
 """JSON API endpoints used by the management page in the browser.
 
-Four endpoints (design §7.3 / §8):
+Three groups (design §7.3 / §8 / §15.3.1):
 
-  - ``GET /api/files``                Bearer; list docroot
-  - ``DELETE /api/files/<name>``      Bearer; delete
-  - ``GET /api/nginx-config``         Bearer; rendered reverse-proxy snippet
-  - ``GET /api/health``               NO AUTH; liveness probe
+  HTML management (Bearer-protected, except /api/health):
+    GET    /api/files                           list docroot
+    DELETE /api/files/<name>                    delete
+    GET    /api/nginx-config                    rendered reverse-proxy snippet
+    GET    /api/health                          liveness probe (no auth)
+    POST   /api/auth                            Bearer → annotation session cookie
+
+  Annotation REST (cookie + CSRF, except GET is public):
+    GET    /api/files/<name>/annotations        list (no auth)
+    POST   /api/files/<name>/annotations        add (cookie + CSRF)
+    PATCH  /api/files/<name>/annotations/<id>   edit own (cookie + CSRF + author)
+    DELETE /api/files/<name>/annotations/<id>   delete own (cookie + CSRF + author)
+
+  Container-mode public HTML (design §15.3.1; classic mode serves via nginx):
+    GET    /files/<name>                        stream public HTML file
 
 Each handler is a closure over ``cfg`` (built by ``register_routes``).
 Storage exceptions map to HTTP status codes per design §7.3.
@@ -93,9 +104,17 @@ def _file_info_payload(
 # --- handlers ----------------------------------------------------------------
 
 def _validate_anno_name(name: str) -> bool:
-    """Validate annotation lookup name (same regex as storage layer)."""
-    import re as _re
-    return bool(name) and bool(_re.match(r"^[A-Za-z0-9._-]+\.html$", name, _re.IGNORECASE))
+    """Validate annotation lookup name (same rules as storage layer).
+
+    Returns True if ``name`` is a legal upload filename, False otherwise.
+    Defers to ``storage.validate_name`` so the regex / length cap stay
+    in one place.
+    """
+    try:
+        storage.validate_name(name)
+        return True
+    except storage.InvalidName:
+        return False
 
 
 def _anno_session_token(req) -> "Optional[str]":

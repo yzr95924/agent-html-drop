@@ -1,6 +1,6 @@
 """TOML-backed config for agent-html-drop.
 
-Mirrors model_switch/store.py's discipline:
+Unknown-key pass-through discipline:
 
   - Unknown top-level keys land in ``Config.extra_top``.
   - Unknown ``[auth]`` keys land in ``Config.extra_auth``.
