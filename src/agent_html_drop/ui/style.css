@@ -256,3 +256,14 @@ code {
   color: var(--danger);
   border-color: var(--danger);
 }
+
+/* File table — filename column renders as <a>; without this it falls back
+   to the user-agent default (#0000EE in Chrome), which is unreadable on
+   the dark --bg #0f1115. Use --accent (#5da7ff, ~8.4:1 on bg) instead. */
+#file-table td a {
+  color: var(--accent);
+  text-decoration: none;
+}
+#file-table td a:hover {
+  text-decoration: underline;
+}

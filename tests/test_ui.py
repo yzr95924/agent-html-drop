@@ -45,6 +45,21 @@ def test_style_css_exists():
     assert os.path.isfile(os.path.join(ui_mod._UI_DIR, "style.css"))
 
 
+def test_filename_link_has_color_rule():
+    """Regression: file-table 名称列的 <a> 必须有显式 color 规则。
+
+    没这条规则时，浏览器 user-agent 默认 link 颜色（深蓝 #0000ee）
+    在 --bg #0f1115 黑色背景上对比度只有 ~2.0，深色模式下根本看不见。
+    """
+    text = open(os.path.join(ui_mod._UI_DIR, "style.css"), encoding="utf-8").read()
+    assert "#file-table td a" in text, (
+        "style.css 没有定义 #file-table td a 的颜色；"
+        "浏览器默认 link 蓝色在深色背景上不可读。"
+    )
+    # 也确认它用了 accent 变量而不是写死深色 hex
+    assert "color: var(--accent)" in text
+
+
 def test_app_js_exists():
     assert os.path.isfile(os.path.join(ui_mod._UI_DIR, "app.js"))
 
