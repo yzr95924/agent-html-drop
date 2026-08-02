@@ -16,7 +16,7 @@ IMG="${SMOKE_IMAGE:-ahd-smoke:latest}"
 HOST_PORT=18765
 CID=ahd-smoke
 DATA_DIR="$(mktemp -d)"
-trap 'docker rm -f "$CID" >/dev/null 2>&1 || true; rm -rf "$DATA_DIR"' EXIT
+trap 'docker rm -f "$CID" >/dev/null 2>&1 || true; rm -rf "$DATA_DIR" 2>/dev/null || true' EXIT
 
 if [[ -n "${SMOKE_IMAGE:-}" ]]; then
   echo ">> pulling image: $IMG"
