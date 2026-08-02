@@ -18,7 +18,7 @@
 | Registry | **GHCR** (`ghcr.io/<owner>/agent-html-drop`) | 与 GitHub repo 绑定，`GITHUB_TOKEN` 内置 packages:write；公开包匿名 pull 无硬限；Docker CLI 原生支持 `ghcr.io` 前缀 |
 | 受众 | **公开** | README 里直接给 `docker compose up` 即可用，无登录门槛 |
 | 触发 | **`v*` git tag push** | 不可变标签，发布即定型，避免 commit 噪声触发构建浪费 CI 配额 |
-| Tag 矩阵 | `vX.Y.Z`、`X.Y`、`X.Y.Z`、`latest`、`sha-<short>` | 不可变具体版本 + 浮动 major.minor + 完全浮动 + debug 标签 |
+| Tag 矩阵 | `vX.Y.Z`、`X.Y`、`X.Y.Z`、`latest`、`sha-<short>` | 不可变具体版本 + 浮动 major.minor + 完全浮动 + debug 标签；`latest` 仅当 tag 在 default branch 上时打（防止 RC 污染 latest） |
 | 架构 | **linux/amd64 + linux/arm64** | 覆盖 x86 服务器 / Apple Silicon / AWS Graviton；Python stdlib 项目多架构零额外成本 |
 | CI | **GitHub Actions + `GITHUB_TOKEN`** | 零额外 secret；与 repo 同托管；cache 加速 rebuild |
 | 安全/签名 | **暂不加** | Python stdlib SBOM 薄、CVE 面窄；cosign 签名留作 v2 增强 |
@@ -96,6 +96,8 @@ jobs:
 - `provenance: false`：关掉 SLSA provenance attestation 生成（公开 release 不要求；开启会让 cache 命中变慢）
 - **post-publish smoke** 是新增的端到端验证：pull 刚推的镜像 + 起容器 + `/api/health` 200
   - 复用现有 `scripts/docker-smoke.sh`，加 `--from-registry` 选项（见 §测试策略）
+  - **smoke 在 CI runner 上跑**（ubuntu-latest / amd64），所以**只验证 amd64 manifest**——arm64 manifest 由 build 阶段验证通过，本地 M-series / Graviton 手验
+  - **smoke 失败处理**：workflow 标红 ✗；镜像已留在 GHCR，需要维护者发 patch tag 覆盖或手动 `ghcr.io/<owner>/agent-html-drop` 删 tag——不自动删（避免误删正在用的）
 
 ### Tag 矩阵示例
 
@@ -138,6 +140,7 @@ jobs:
 - **保留 `image:` 字段**指向带版本 tag（不写 `:latest`），避免被悄悄换
 - **删 `build:`** 让 compose 默认走 pull（Docker Compose 行为：`image` + `build` 同时存在时 `build` 优先——所以保留 `build:` 会让 pull 失效）
 - 容器内行为 / 端口 / 卷定义完全不变——这是**对现有部署不破坏**的兼容性改动
+- **`<owner>` 占位符**：第一次发版后维护者手动把 `<owner>` 替换为真实 GitHub username 并随 v0.1.0 tag 一同提交。后续 tag 不需要再改（除非 repo 换 owner）
 
 ## README 更新
 
@@ -230,7 +233,7 @@ bash scripts/docker-smoke.sh --from-registry v0.1.0
 | 镜像 manifest list 同时支持 amd64 + arm64 | `docker buildx imagetools inspect ghcr.io/<owner>/agent-html-drop:v0.1.0` 输出含 `linux/amd64` 和 `linux/arm64` |
 | post-publish smoke 通过 | workflow 日志显示 `/api/health` 返回 200，文件读写测试通过 |
 | 别人 clone repo + `docker compose up -d` 起得来 | 在干净容器 / 干净机器上手测（不需要 build） |
-| 现有 258 个 pytest 仍通过 | `pytest` 不变 |
+| 现有 pytest 全过（写 spec 时 258 个） | `pytest` 不变 |
 | README 把安装步骤更新到 "clone + 编辑 compose + up" | 文档审阅 |
 
 ## 替代方案（已否决）
