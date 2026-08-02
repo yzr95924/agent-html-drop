@@ -59,7 +59,7 @@
 | T20 | 公开 URL 统一加 `/files/` 段（`api._file_info_payload` 1 处 + `mcp_handler` upload/list/get_public_url 3 处 = 共 4 处构造）+ 迁移注记 + 单元测试更新 | F4, F8 | §15.3.2, §4 | S7, S11 | T5, T6 | 待验收 | 半天 |
 | T21 | `assets/nginx.conf.template` 重写为极简反代片段（去 SSL/alias）+ `nginx_config` 渲染 + 单元测试更新 | F13 | §15.3.3, §7.3 | S2, S23 | T8 | 待验收 | 半天 |
 | T22 | `Dockerfile` + `docker/entrypoint.sh` + `.dockerignore`（`python:3.12-slim`，非 root，首次自动种 config + token） | — | §15.4 | 容器启动（新） | T19–T21 | 待验收 | 1 天 |
-| T23 | `docker-compose.yml` + 反代片段 docs（两 bind mount + `ports: 127.0.0.1:8765:8765` + healthcheck） | — | §15.4, §15.5 | compose 部署（新） | T22 | 待验收 | 半天 |
+| T23 | `docker-compose.yaml` + 反代片段 docs（两 bind mount + `ports: 127.0.0.1:8765:8765` + healthcheck） | — | §15.4, §15.5 | compose 部署（新） | T22 | 待验收 | 半天 |
 | T24 | README / AGENTS 容器化章节（部署 / 备份 / 迁移 / token 获取） | — | §15, §12 | — | T22, T23 | 待验收 | 半天 |
 | T25 | 容器冒烟测试（build → run → `/api/health` 200 → 上传 HTML → `/files/x.html` 200） | — | §15.7 | 容器 E2E（新） | T19–T24 | 进行中 | 半天 |
 
@@ -235,7 +235,7 @@
   - entrypoint 种 config 逻辑在本机无 docker 下已离线验证：TOML 正确、`load_config`+`validate_for_serve` round-trip 过、perms 0600。
 - 验收：镜像未本机构建（本机无 docker）；bootstrap 逻辑已离线验证，待 T25 实跑。
 
-### T23 docker-compose.yml + 反代片段 docs
+### T23 docker-compose.yaml + 反代片段 docs
 
 - 状态：待验收
 - 执行记录：

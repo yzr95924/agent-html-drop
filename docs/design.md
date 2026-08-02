@@ -768,7 +768,7 @@ agent-html-drop status
 
 ### 15.1 目标与范围
 
-把 daemon 打成**自包含 Docker 镜像**，让用户用自己的 nginx 反代 HTTP 到容器端口即可上线；daemon 不依赖容器内 TLS（TLS 在边缘 nginx 终结）。交付物：`Dockerfile` + `docker/entrypoint.sh` + `docker-compose.yml` + 极简反代片段。
+把 daemon 打成**自包含 Docker 镜像**，让用户用自己的 nginx 反代 HTTP 到容器端口即可上线；daemon 不依赖容器内 TLS（TLS 在边缘 nginx 终结）。交付物：`Dockerfile` + `docker/entrypoint.sh` + `docker-compose.yaml` + 极简反代片段。
 
 非目标（YAGNI）：容器内塞 nginx、容器内 TLS、named volume、多架构构建、每字段 env 覆盖。经典安装路径（`scripts/install.sh`）零影响——容器化是叠加，不替换。
 
@@ -801,7 +801,7 @@ agent-html-drop status
 
 - **`Dockerfile`**：`python:3.12-slim` 基底（源码仍 3.7 兼容，但镜像跑 3.12；3.12 自带 `tomllib`，**零运行时依赖**，无需 `tomli`）；拷 `src/`；非 root 用户；`CMD` 走 entrypoint。
 - **`docker/entrypoint.sh`**：首次运行若 config 缺失 → 用模板 + `secrets.token_hex(32)` 种一份容器友好 config（`host=0.0.0.0` / `port=8765` / `docroot=/data/docroot` / `public_base_url=$PUBLIC_BASE_URL`），建 docroot 目录若缺，再 `exec agent-html-drop serve`；config 已存在则直接 serve（持久 config 优先，env 不覆盖）。
-- **`docker-compose.yml`**：单 `agent-html-drop` 服务 + 两 bind mount + `ports: 127.0.0.1:8765:8765` + `environment: PUBLIC_BASE_URL` + `healthcheck`（探 `/api/health`）。
+- **`docker-compose.yaml`**：单 `agent-html-drop` 服务 + 两 bind mount + `ports: 127.0.0.1:8765:8765` + `environment: PUBLIC_BASE_URL` + `healthcheck`（探 `/api/health`）。
 - **反代片段**：15.3.3 模板的渲染产物，贴进用户现有 nginx。
 
 ### 15.5 数据与卷

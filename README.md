@@ -118,7 +118,7 @@ agent 现在可以调 4 个 tool：`upload_html` / `list_html` / `delete_html` /
 终结（边缘 HTTPS + 内部 HTTP，`Secure` cookie / CSRF 照常工作）。详见 `docs/design.md` §15。
 
 ```bash
-# 1. 编辑 docker-compose.yml，把 PUBLIC_BASE_URL 改成你的 HTTPS origin
+# 1. 编辑 docker-compose.yaml，把 PUBLIC_BASE_URL 改成你的 HTTPS origin
 # 2. 起服务（首次自动生成 token + config，持久化在 ./data/）
 docker compose up -d --build
 
@@ -136,7 +136,7 @@ docker compose exec agent-html-drop agent-html-drop nginx-config
 | docroot | `/data/docroot` | `./data/docroot` | HTML + 批注——备份目标 |
 | config+token | `/data/config`（→ `…/agent-html-drop/config.toml`） | `./data/config` | 凭据，`0600`，单独备份 |
 
-迁移到另一台机：`scp` 整个 `./data/` + `docker-compose.yml`（+ 重新 build 镜像）即可。
+迁移到另一台机：`scp` 整个 `./data/` + `docker-compose.yaml`（+ 重新 build 镜像）即可。
 
 > **uid 对齐**：容器以非 root（uid 1000）运行。若宿主 `./data/` 所有者不是 uid 1000，
 > 写 docroot/config 会权限拒绝——`chown -R 1000:1000 ./data`，或在 compose 里覆盖 `user:`。
@@ -229,7 +229,7 @@ bash scripts/docker-smoke.sh                                       # 一键冒�
 
 - 容器跑一会变 `Restarting`：当前版本（v0.1.0 之前）有此 bug，已修复；升级镜像即可。
 - `exec` 报 "executable file not found"：写漏了第二个 `agent-html-drop`。
-- 改了 `docker-compose.yml` 但没生效：要 `docker compose up -d`（不是 `restart`）。
+- 改了 `docker-compose.yaml` 但没生效：要 `docker compose up -d`（不是 `restart`）。
 - `data/` 权限拒绝：容器以 uid 1000 跑，`chown -R 1000:1000 ./data` 对齐。
 agent-html-drop nginx-config --write [PATH]     # 写到 ~/.config/agent-html-drop/nginx.conf.example
 agent-html-drop status                          # 简报:config / token / docroot 状态
