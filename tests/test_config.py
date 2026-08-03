@@ -189,6 +189,34 @@ def test_validate_for_serve_rejects_empty_docroot():
         validate_for_serve(cfg)
 
 
+# --- allow_insecure_annotations ---------------------------------------------
+
+def test_allow_insecure_annotations_defaults_false():
+    cfg = Config(token="x" * 64)
+    assert cfg.allow_insecure_annotations is False
+
+
+def test_allow_insecure_annotations_round_trip(tmp_path):
+    p = tmp_path / "config.toml"
+    save_config(p, Config(token="x" * 64, allow_insecure_annotations=True))
+    loaded = load_config(p)
+    assert loaded.allow_insecure_annotations is True
+
+
+def test_load_config_rejects_non_bool_allow_insecure(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text(
+        'host = "127.0.0.1"\n'
+        'port = 8765\n'
+        'docroot = "/var/www/notes"\n'
+        'public_base_url = "https://notes.example.com"\n'
+        'max_file_size = 52428800\n'
+        'allow_insecure_annotations = "yes"\n'  # wrong type
+    )
+    with pytest.raises(InvalidConfig):
+        load_config(p)
+
+
 # --- helpers -----------------------------------------------------------------
 
 def stat_mode(path):

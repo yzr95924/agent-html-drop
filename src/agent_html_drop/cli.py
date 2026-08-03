@@ -43,6 +43,17 @@ from agent_html_drop.config import (
 from ._version import VERSION
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean env var; unset -> ``default``.
+
+    Accepts 1/true/yes/on (case-insensitive) as True, anything else as False.
+    """
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 # --- subcommand handlers ----------------------------------------------------
 
 def cmd_init(args) -> int:
@@ -82,6 +93,21 @@ def cmd_serve(args) -> int:
     except InvalidConfig as exc:
         print("Error: invalid config: {}".format(exc), file=sys.stderr)
         return 2
+
+    # Runtime env override: ALLOW_INSECURE_ANNOTATIONS flips the opt-in
+    # plain-HTTP annotation mode on every start, so a docker-compose switch
+    # takes effect on `up` without reseeding config.toml. TOML is the
+    # persistent default; the env var, when set, wins.
+    cfg.allow_insecure_annotations = _env_bool(
+        "ALLOW_INSECURE_ANNOTATIONS", cfg.allow_insecure_annotations
+    )
+    if cfg.allow_insecure_annotations:
+        print(
+            "WARNING: ALLOW_INSECURE_ANNOTATIONS is on — annotation session "
+            "cookies are served WITHOUT Secure and http Origins are accepted. "
+            "This is insecure; use only for local testing with no TLS terminator.",
+            file=sys.stderr,
+        )
 
     # Wire config into runtime.
     srv.Handler.max_body_size = cfg.max_file_size

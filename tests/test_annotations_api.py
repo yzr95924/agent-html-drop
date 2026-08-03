@@ -62,6 +62,78 @@ def http_server(cfg_factory):
         routes.clear()
 
 
+@pytest.fixture
+def http_server_insecure(cfg_factory):
+    """Like http_server but with allow_insecure_annotations=True (plain-HTTP mode)."""
+    routes.clear()
+    cfg = cfg_factory(docroot_files=[("design.html", "<h1>Design</h1>")])
+    cfg.allow_insecure_annotations = True
+    srv = make_server("127.0.0.1", 0, quiet=True)
+    register_routes(cfg)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield srv, cfg
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        routes.clear()
+
+
+def test_insecure_mode_auth_sets_cookie_without_secure(http_server_insecure):
+    srv, cfg = http_server_insecure
+    host, port = srv.server_address
+    conn, response = _post(
+        host, port, "/api/auth",
+        headers={"Authorization": "Bearer " + cfg.token},
+    )
+    try:
+        assert response.status == 204
+        sc = response.getheader("Set-Cookie")
+        assert "anno_session=" in sc
+        assert "Secure" not in sc
+        assert "HttpOnly" in sc
+    finally:
+        response.read()
+        conn.close()
+
+
+def test_insecure_mode_post_annotation_with_http_origin_succeeds(http_server_insecure):
+    """Insecure mode: http Origin + matching Host:port → annotation created."""
+    from agent_html_drop.auth_anno import ANNO_COOKIE_NAME
+    srv, cfg = http_server_insecure
+    host, port = srv.server_address
+    conn, response = _post(
+        host, port, "/api/auth",
+        headers={"Authorization": "Bearer " + cfg.token},
+    )
+    try:
+        sc = response.getheader("Set-Cookie")
+        cookie = SimpleCookie()
+        cookie.load(sc)
+        cookie_value = cookie[ANNO_COOKIE_NAME].value
+    finally:
+        response.read()
+        conn.close()
+    conn, response = _post(
+        host, port, "/api/files/design.html/annotations",
+        body=b'{"quote":"q","comment":"c"}',
+        headers={
+            "Cookie": ANNO_COOKIE_NAME + "=" + cookie_value,
+            "Content-Type": "application/json",
+            "Origin": "http://{}:{}".format(host, port),
+            "Host": "{}:{}".format(host, port),
+        },
+    )
+    try:
+        assert response.status == 201
+        data = json.loads(response.read())
+        assert data["quote"] == "q"
+    finally:
+        response.read()
+        conn.close()
+
+
 def _post(host, port, path, body=b"", headers=None):
     hdrs = {"Content-Length": str(len(body))}
     if headers:

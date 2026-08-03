@@ -4,7 +4,7 @@ import time
 import pytest
 
 from agent_html_drop.auth_anno import (
-    sign_cookie, verify_cookie, csrf_check,
+    sign_cookie, verify_cookie, csrf_check, cookie_set_header,
     ANNO_COOKIE_NAME, ANNO_COOKIE_MAX_AGE,
 )
 from agent_html_drop.config import Config, save_config
@@ -67,3 +67,39 @@ def test_csrf_check_mismatched_origin_fails():
 
 def test_csrf_check_origin_with_port_matches_hostname_only():
     assert csrf_check("notes.example.com:443", "https://notes.example.com") is True
+
+
+# --- insecure (plain-HTTP) annotation mode ----------------------------------
+
+def test_cookie_set_header_secure_by_default():
+    h = cookie_set_header("v")
+    assert "Secure" in h
+    assert "HttpOnly" in h
+    assert "SameSite=Lax" in h
+
+
+def test_cookie_set_header_insecure_omits_secure():
+    h = cookie_set_header("v", secure=False)
+    assert "Secure" not in h
+    assert "HttpOnly" in h
+    assert "SameSite=Lax" in h
+
+
+def test_csrf_check_http_origin_rejected_by_default():
+    assert csrf_check("localhost:8765", "http://localhost:8765") is False
+
+
+def test_csrf_check_http_origin_allowed_when_insecure():
+    assert csrf_check("localhost:8765", "http://localhost:8765", allow_insecure=True) is True
+
+
+def test_csrf_check_http_origin_wrong_host_rejected_even_when_insecure():
+    assert csrf_check("localhost:8765", "http://evil.com", allow_insecure=True) is False
+
+
+def test_csrf_check_http_origin_port_mismatch_rejected_when_insecure():
+    assert csrf_check("localhost:8765", "http://localhost:9999", allow_insecure=True) is False
+
+
+def test_csrf_check_https_origin_allowed_when_insecure():
+    assert csrf_check("notes.example.com", "https://notes.example.com", allow_insecure=True) is True

@@ -1,11 +1,7 @@
 # agent-html-drop daemon (design §15).
 #
-# Image: published at ghcr.io/yzr95924/agent-html-drop. `docker compose up`
-# pulls the published image; no local build required.
-#
-# Forking? Change `yzr95924` to your own GitHub username / org and bump
-# the tag to the release you want. The first time you deploy, follow
-# README "Docker 部署" end-to-end.
+# Builds locally from this folder — `docker compose up -d --build` compiles
+# the image from ./Dockerfile. No published image or registry required.
 #
 # Put your own nginx (TLS terminator) in front, reverse-proxying HTTP to
 # 127.0.0.1:8765. Get the nginx snippet with:
@@ -14,19 +10,25 @@
 # First `up` auto-generates a bearer token, persisted in ./data/config.
 # Retrieve it:
 #   docker compose exec agent-html-drop agent-html-drop token show
-#
-# To rebuild locally (e.g. while developing), uncomment `build: .` below
-# — it overrides the `image:` field.
 services:
   agent-html-drop:
-    # Pin a specific tag so silent :latest bumps don't break you.
-    image: ghcr.io/yzr95924/agent-html-drop:v0.1.0
-    # build: .
+    # Build the image from the current folder (./Dockerfile). Re-run with
+    # `--build` to pick up source changes: `docker compose up -d --build`.
+    build: .
     restart: unless-stopped
     environment:
       # Public origin of your deployment; used to render public file URLs.
       # Set this to your real HTTPS origin.
       PUBLIC_BASE_URL: "https://notes.example.com"
+      # ── INSECURE / testing only ───────────────────────────────────────
+      # Set "1" to let browser annotation/review work over PLAIN HTTP — i.e.
+      # when you expose this service directly (0.0.0.0) with NO TLS terminator
+      # in front. It drops `Secure` from the annotation session cookie AND
+      # accepts `http://` Origins (CSRF), so the annotation cookie travels in
+      # cleartext. NEVER enable on a public network. Default/unset = secure
+      # (annotations require HTTPS, as designed §15). Takes effect on every
+      # `up` — no need to reseed ./data/config.
+      ALLOW_INSECURE_ANNOTATIONS: "0"
     ports:
       # Publish ONLY to the host loopback — your nginx reaches it, the public
       # internet cannot. (The daemon binds 0.0.0.0 inside the container.)

@@ -159,7 +159,11 @@ def _make_post_annotation(cfg: Config):
         token = _anno_session_token(req)
         if not token:
             return (401, _err("unauthorized", "no valid anno session"), JSON)
-        if not csrf_check(req.headers.get("Host", ""), req.headers.get("Origin")):
+        if not csrf_check(
+            req.headers.get("Host", ""),
+            req.headers.get("Origin"),
+            allow_insecure=cfg.allow_insecure_annotations,
+        ):
             return (403, _err("csrf", "origin mismatch"), JSON)
         name = params.get("name", "")
         if not _validate_anno_name(name):
@@ -192,7 +196,11 @@ def _make_patch_annotation(cfg: Config):
         token = _anno_session_token(req)
         if not token:
             return (401, _err("unauthorized", "no valid anno session"), JSON)
-        if not csrf_check(req.headers.get("Host", ""), req.headers.get("Origin")):
+        if not csrf_check(
+            req.headers.get("Host", ""),
+            req.headers.get("Origin"),
+            allow_insecure=cfg.allow_insecure_annotations,
+        ):
             return (403, _err("csrf", "origin mismatch"), JSON)
         name = params.get("name", "")
         id_ = params.get("id", "")
@@ -231,7 +239,11 @@ def _make_delete_annotation(cfg: Config):
         token = _anno_session_token(req)
         if not token:
             return (401, _err("unauthorized", "no valid anno session"), JSON)
-        if not csrf_check(req.headers.get("Host", ""), req.headers.get("Origin")):
+        if not csrf_check(
+            req.headers.get("Host", ""),
+            req.headers.get("Origin"),
+            allow_insecure=cfg.allow_insecure_annotations,
+        ):
             return (403, _err("csrf", "origin mismatch"), JSON)
         name = params.get("name", "")
         id_ = params.get("id", "")
@@ -276,7 +288,9 @@ def _make_auth(cfg: Config):
             b"",
             {
                 "Set-Cookie": cookie_set_header(
-                    cookie_value, ANNO_COOKIE_MAX_AGE
+                    cookie_value,
+                    ANNO_COOKIE_MAX_AGE,
+                    secure=not cfg.allow_insecure_annotations,
                 )
             },
         )
