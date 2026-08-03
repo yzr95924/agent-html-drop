@@ -26,6 +26,14 @@
 - **原子写文件**。TOML 与 docroot 文件都先写 `.tmp` 再 `os.replace()`，永远不出现半写状态。
 - **路径穿越防护**：所有文件名过 `^[A-Za-z0-9._-]+\.html$` regex，绝不拼接未校验的用户输入进路径。
 
+<!-- ↓ 默认启用：repo-local 记忆管理（让多 agent 共用同一份 MEMORY/，而非各自私有 memory）。
+     记忆跟 repo 走——本注释 + 以下规约 + 下方「跨会话记忆（索引）」段一律保留（R6）。 -->
+- 跨会话需持久化的"为什么 / 边界规则"写入根目录 `MEMORY/`（`MEMORY.md` 是索引），**禁写** agent
+  私有 memory——私有路径不随仓迁移 / 不进 git / 多 agent 各写各的会分裂成 N 份。
+  - 完整 memory（设计决策 / 工作流约束）→ `MEMORY/<slug>.md`，带 frontmatter 三件套：
+    `name`(=文件 slug) + `description`(≤200 字符事实摘要) + `metadata.type`(user|feedback|project|reference)
+  - 短 memory（一句话事实）→ 直接写 `MEMORY.md` 索引行，不单独建文件
+
 ## 常用命令
 
 ```bash
@@ -89,6 +97,10 @@ MCP 工具（`tools/call`）：`upload_html` / `list_html` / `delete_html` / `ge
 / `list_annotations` / `delete_annotation`。MCP 协议自实现，无第三方 SDK 依赖。
 
 详见 `docs/design.md` / `docs/tasks.md`。
+
+## 跨会话记忆（索引）
+
+@MEMORY/MEMORY.md
 
 ## 注意事项
 
