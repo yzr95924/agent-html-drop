@@ -1,15 +1,19 @@
-# agent-html-drop daemon (design §15).
+# agent-html-drop — DEMO 模板：无 nginx,直接 0.0.0.0 暴露 daemon(纯 HTTP)。
 #
-# Builds locally from this folder — `docker compose up -d --build` compiles
-# the image from ./Dockerfile. No published image or registry required.
+# 适用:本机试玩 / 内网 demo / 快速验证批注流程。一条命令起服务:
+#   docker compose up -d --build
+# 然后浏览器直接访问:
+#   http://localhost:8765          (本机)
+#   http://<局域网 IP>:8765        (同网段其他设备)
 #
-# Put your own nginx (TLS terminator) in front, reverse-proxying HTTP to
-# 127.0.0.1:8765. Get the nginx snippet with:
-#   docker compose exec agent-html-drop agent-html-drop nginx-config
-#
-# First `up` auto-generates a bearer token, persisted in ./data/config.
-# Retrieve it:
+# 取 token(进批注模式 / 配 agent MCP 都要用):
 #   docker compose exec agent-html-drop agent-html-drop token show
+#
+# ⚠️ 这与生产形态(design §15:nginx 终结 TLS + 反代 127.0.0.1:8765)不同:
+#   - 纯 HTTP,流量不加密;bearer token 与批注 session cookie 明文传输
+#   - 管理页 / API / /files/* 全部对网络可达者开放(管理页只读,但列表元数据公开)
+#   请勿在公网或不可信网络使用;生产部署请把 ports 改回 "127.0.0.1:8765:8765"、
+#   ALLOW_INSECURE_ANNOTATIONS 改回 "0",并在前面架 nginx(见 README)。
 services:
   agent-html-drop:
     # Build the image from the current folder (./Dockerfile). Re-run with
@@ -17,22 +21,17 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      # Public origin of your deployment; used to render public file URLs.
-      # Set this to your real HTTPS origin.
-      PUBLIC_BASE_URL: "https://notes.example.com"
-      # ── INSECURE / testing only ───────────────────────────────────────
-      # Set "1" to let browser annotation/review work over PLAIN HTTP — i.e.
-      # when you expose this service directly (0.0.0.0) with NO TLS terminator
-      # in front. It drops `Secure` from the annotation session cookie AND
-      # accepts `http://` Origins (CSRF), so the annotation cookie travels in
-      # cleartext. NEVER enable on a public network. Default/unset = secure
-      # (annotations require HTTPS, as designed §15). Takes effect on every
-      # `up` — no need to reseed ./data/config.
-      ALLOW_INSECURE_ANNOTATIONS: "0"
+      # 渲染公开文件 URL 用的 origin。本机 demo 保持 localhost 即可;
+      # 要给同网段设备访问,改成 http://<你的局域网 IP>:8765,复制出的
+      # URL 才会指对地方。
+      PUBLIC_BASE_URL: "http://localhost:8765"
+      # demo 必须开:没有 TLS 终结者时,批注 session cookie 需要去掉
+      # `Secure`、CSRF 需要接受 http:// Origin,否则浏览器批注写不进去。
+      # (设计默认 "0" = 强制 HTTPS,见 §15。)
+      ALLOW_INSECURE_ANNOTATIONS: "1"
     ports:
-      # Publish ONLY to the host loopback — your nginx reaches it, the public
-      # internet cannot. (The daemon binds 0.0.0.0 inside the container.)
-      - "127.0.0.1:8765:8765"
+      # DEMO:直接绑 0.0.0.0,网络内任何人可访问。
+      - "8765:8765"
     volumes:
       # HTML files + annotation sidecars — your backup target.
       - ./data/docroot:/data/docroot
