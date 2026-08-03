@@ -113,7 +113,17 @@
         // instead of monospace — the URL is for copy-paste, not code reading.
         tdUrl.style.wordBreak = "break-all";
         tdUrl.style.fontSize = "13px";
-        tdUrl.appendChild(document.createTextNode(f.url + " "));
+        // The URL is itself a clickable link — opens the public page (which
+        // renders annotations read-only) in a new tab. The first column's
+        // <a data-name> is a different element and still opens the in-page
+        // preview, so the two don't collide.
+        var urlLink = document.createElement("a");
+        urlLink.href = f.url;
+        urlLink.target = "_blank";
+        urlLink.rel = "noopener noreferrer";
+        urlLink.textContent = f.url;
+        tdUrl.appendChild(urlLink);
+        tdUrl.appendChild(document.createTextNode(" "));
         var copyBtn = document.createElement("button");
         copyBtn.textContent = "复制";
         copyBtn.onclick = function () { copyUrl(f.url); };
@@ -184,6 +194,25 @@
   var annoCurrentFile = null;
   var annoEntries = [];
 
+  // --- UI-pref persistence (layout only; the token is NEVER persisted) ---
+  var LS_ANNO_COLLAPSED = "agent-html-drop:annoCollapsed";
+  var LS_TOC_HIDDEN = "agent-html-drop:tocHidden";
+
+  function lsBool(key, dflt) {
+    try {
+      var v = localStorage.getItem(key);
+      return v === null ? dflt : v === "1";
+    } catch (e) {
+      return dflt;
+    }
+  }
+  function lsSetBool(key, val) {
+    try { localStorage.setItem(key, val ? "1" : "0"); } catch (e) {}
+  }
+
+  var annoCollapsed = lsBool(LS_ANNO_COLLAPSED, false);
+  var tocHidden = lsBool(LS_TOC_HIDDEN, false);
+
   // --- DOM refs (anno-specific) --------------------------------------
   var $annoToggle = document.getElementById("anno-toggle");
   var $annoModeHint = document.getElementById("anno-mode-hint");
@@ -198,6 +227,9 @@
   var $annoEmpty = document.getElementById("anno-empty");
   var $annoSidebarRefresh = document.getElementById("anno-sidebar-refresh");
   var $annoSidebarTitle = document.getElementById("anno-sidebar-title");
+  var $annoCollapse = document.getElementById("anno-collapse");
+  var $annoOpener = document.getElementById("anno-opener");
+  var $tocToggle = document.getElementById("toc-toggle");
 
   // --- helpers -------------------------------------------------------
 
@@ -232,15 +264,34 @@
     if (mode === "anno") {
       $annoToggle.hidden = true;
       $annoModeHint.hidden = false;
-      $annoSidebar.hidden = false;
     } else {
       $annoToggle.hidden = false;
       $annoModeHint.hidden = true;
-      $annoSidebar.hidden = true;
-      clearAnnoList();
       pendingQuote = null;
       hideAddFab();
+      // Leaving anno mode keeps the file + annotations visible (read-only);
+      // re-render so the auth-backed delete buttons drop out.
+      renderAnnoList();
+      highlightIframe();
     }
+    applyAnnoSidebarVisibility();
+  }
+
+  // --- annotation panel fold (persisted) -----------------------------
+  // Visibility = user wants it open AND there's something to show:
+  // a file is previewed AND (anno mode, or it actually has annotations).
+  // Read mode with zero annotations stays out of the way.
+  function applyAnnoSidebarVisibility() {
+    var relevant = !!annoCurrentFile && (mode === "anno" || annoEntries.length > 0);
+    var wantVisible = !annoCollapsed && relevant;
+    $annoSidebar.classList.toggle("collapsed", !wantVisible);
+    $annoOpener.hidden = !annoCollapsed;
+  }
+
+  function setAnnoCollapsed(c) {
+    annoCollapsed = c;
+    lsSetBool(LS_ANNO_COLLAPSED, c);
+    applyAnnoSidebarVisibility();
   }
 
   function showAnnoError(msg) {
@@ -254,7 +305,21 @@
 
   // --- auth flow -----------------------------------------------------
 
-  $annoToggle.onclick = function () {
+  // --- session probe: skip the token dialog when the HttpOnly cookie is
+  //     still valid. The cookie is HttpOnly so JS can't read it; we ask the
+  //     server via GET /api/auth (204 = logged in, 401 = prompt for token). ---
+  function probeSession(onValid, onInvalid) {
+    fetch("/api/auth", { method: "GET", credentials: credentials() })
+      .then(function (r) { (r.status === 204 ? onValid : onInvalid)(); })
+      .catch(function () { if (onInvalid) onInvalid(); });
+  }
+
+  function enterAnnoMode() {
+    setMode("anno");
+    if (annoCurrentFile) refreshAnnoList();
+  }
+
+  function openTokenDialog() {
     clearAnnoError();
     $annoInput.value = "";
     if (typeof $annoDialog.showModal === "function") {
@@ -263,6 +328,11 @@
       $annoDialog.setAttribute("open", "");
     }
     $annoInput.focus();
+  }
+
+  // Clicking 批注: probe first — if already logged in, skip the token dialog.
+  $annoToggle.onclick = function () {
+    probeSession(enterAnnoMode, openTokenDialog);
   };
 
   $annoCancel.onclick = function () { $annoDialog.close(); };
@@ -305,6 +375,9 @@
 
   $annoSidebarRefresh.onclick = function () { refreshAnnoList(); };
 
+  if ($annoCollapse) $annoCollapse.onclick = function () { setAnnoCollapsed(true); };
+  if ($annoOpener) $annoOpener.onclick = function () { setAnnoCollapsed(false); };
+
   // --- annotations: list / render -----------------------------------
 
   function refreshAnnoList() {
@@ -326,6 +399,7 @@
   function renderAnnoList() {
     $annoList.innerHTML = "";
     $annoSidebarTitle.textContent = "批注 · " + annoCurrentFile;
+    applyAnnoSidebarVisibility();
     if (!annoEntries.length) {
       $annoEmpty.hidden = false;
       return;
@@ -346,15 +420,17 @@
       meta.className = "meta";
       meta.textContent = e.author + " · " + new Date(e.ts * 1000).toISOString().slice(0, 16).replace("T", " ");
       li.appendChild(meta);
-      // Actions: only in anno mode.
-      var actions = document.createElement("div");
-      actions.className = "actions";
-      var delBtn = document.createElement("button");
-      delBtn.className = "danger";
-      delBtn.textContent = "删除";
-      delBtn.onclick = function () { deleteAnno(e.id); };
-      actions.appendChild(delBtn);
-      li.appendChild(actions);
+      // Delete is auth-backed (anno session cookie); read mode hides it.
+      if (mode === "anno") {
+        var actions = document.createElement("div");
+        actions.className = "actions";
+        var delBtn = document.createElement("button");
+        delBtn.className = "danger";
+        delBtn.textContent = "删除";
+        delBtn.onclick = function () { deleteAnno(e.id); };
+        actions.appendChild(delBtn);
+        li.appendChild(actions);
+      }
       $annoList.appendChild(li);
     });
   }
@@ -408,10 +484,28 @@
 
   var BLOCK_RE = /^(P|DIV|H1|H2|H3|H4|H5|H6|LI|DT|DD|TD|TH|TR|TABLE|SECTION|ARTICLE|HEADER|FOOTER|BLOCKQUOTE|PRE|UL|OL|DL|FIGURE|FIGCAPTION|FORM|FIELDSET|NAV|ASIDE|MAIN|HR)$/;
 
+  // Style annotation <mark>s inside the preview iframe. The iframe is a
+  // separate document, so the management page's style.css doesn't reach it,
+  // and the md→html theme has no `mark` rule — without this, <mark> falls
+  // back to the browser-default glaring yellow, which wouldn't match the
+  // public page. Keep this color IN SYNC with anno-viewer.js's
+  // mark[data-anno-id] rule (see test_mark_color_matches_*).
+  function ensureMarkStyle(doc) {
+    if (doc.getElementById("ahd-anno-marks")) return;
+    var head = doc.head || doc.documentElement;
+    if (!head) return;
+    var s = doc.createElement("style");
+    s.id = "ahd-anno-marks";
+    s.textContent =
+      "mark[data-anno-id]{background:rgba(255,196,0,.32);border-radius:2px;padding:0 1px;}";
+    head.appendChild(s);
+  }
+
   function highlightIframe() {
     if (!$previewFrame || !$previewFrame.contentDocument) return;
     var doc = $previewFrame.contentDocument;
     if (!doc.body) return;
+    ensureMarkStyle(doc);
     unwrapMarks(doc);
     annoEntries.forEach(function (e) {
       var found = highlightQuote(doc, e);
@@ -704,7 +798,8 @@
     pendingQuote = null;
     hideAddFab();
     attachSelectionListener();
-    if (mode === "anno") refreshAnnoList();
+    applyTocToggle();        // re-apply TOC fold to the freshly loaded DOM
+    refreshAnnoList();       // both modes: read-only in read mode, full in anno
   });
 
   // When preview is hidden, clear current file.
@@ -714,7 +809,42 @@
       clearAnnoList();
       pendingQuote = null;
       hideAddFab();
+      applyAnnoSidebarVisibility();
     }
   });
   previewHiddenObserver.observe($previewSection, { attributes: true, attributeFilter: ["hidden"] });
+
+  // --- iframe TOC (大纲) fold: parent-driven -------------------------
+  // sandbox="allow-same-origin" grants no script execution, so the md→html
+  // theme's own JS doesn't run inside the preview. The parent toggles
+  // <aside class="sidebar"> directly; .layout is flex, so hiding the sidebar
+  // lets <main class="content"> take the full width.
+  function applyTocToggle() {
+    if (!$tocToggle) return;
+    var doc = $previewFrame.contentDocument;
+    var sb = doc && doc.querySelector("aside.sidebar");
+    if (!sb) {
+      // File has no TOC (e.g. generated with --no-toc) — nothing to fold.
+      $tocToggle.disabled = true;
+      $tocToggle.setAttribute("aria-pressed", "false");
+      return;
+    }
+    $tocToggle.disabled = false;
+    $tocToggle.setAttribute("aria-pressed", tocHidden ? "true" : "false");
+    sb.style.display = tocHidden ? "none" : "";
+  }
+  if ($tocToggle) {
+    $tocToggle.onclick = function () {
+      tocHidden = !tocHidden;
+      lsSetBool(LS_TOC_HIDDEN, tocHidden);
+      applyTocToggle();
+    };
+  }
+
+  // First paint: sync the opener tab with any persisted fold.
+  applyAnnoSidebarVisibility();
+
+  // After a refresh, auto-resume annotation mode if the session cookie is
+  // still valid — no re-entry of the token.
+  probeSession(enterAnnoMode, null);
 })();

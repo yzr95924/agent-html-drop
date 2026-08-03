@@ -129,3 +129,65 @@ def test_files_streams_large_file(http_with_files):
     assert status == 200
     assert int(headers.get("Content-Length", 0)) == len(body)
     assert data == body
+
+
+# --- annotation viewer injection --------------------------------------------
+# A public URL with annotations gets a read-only viewer <script>; a clean
+# file streams unchanged. See api._inject_viewer + ui/anno-viewer.js.
+
+def test_files_injects_viewer_when_annotated(http_with_files):
+    """A file WITH annotations has the viewer <script> injected before
+    </body> so the public URL renders highlights + comments."""
+    from agent_html_drop.storage import annotations as anno_store
+    http, _, docroot = http_with_files
+    (docroot / "design.html").write_text(
+        "<html><body><p>hello world</p></body></html>", encoding="utf-8"
+    )
+    anno_store.add(docroot, "design.html", "hello world", "a note", "tok")
+    status, headers, data = _get(http, "/files/design.html")
+    assert status == 200
+    text = data.decode("utf-8")
+    assert '<script src="/anno-viewer.js"' in text
+    # Original content preserved, and the tag lands before </body>.
+    assert "hello world" in text
+    assert text.index('<script src="/anno-viewer.js"') < text.lower().index("</body>")
+    # Content-Length matches the (now larger) body exactly — no off-by-one.
+    assert int(headers.get("Content-Length", 0)) == len(data)
+
+
+def test_files_no_viewer_when_unannotated(http_with_files):
+    """A file WITHOUT annotations streams unchanged — zero viewer overhead."""
+    http, _, docroot = http_with_files
+    body = b"<html><body>hello</body></html>"
+    (docroot / "plain.html").write_bytes(body)
+    status, _, data = _get(http, "/files/plain.html")
+    assert status == 200
+    assert data == body
+    assert b"anno-viewer.js" not in data
+
+
+def test_files_inject_viewer_idempotent(http_with_files):
+    """A file that already references the viewer is not double-injected."""
+    from agent_html_drop.storage import annotations as anno_store
+    http, _, docroot = http_with_files
+    raw = (
+        '<html><body><p>x</p>'
+        '<script src="/anno-viewer.js" defer></script>'
+        "</body></html>"
+    )
+    (docroot / "a.html").write_text(raw, encoding="utf-8")
+    anno_store.add(docroot, "a.html", "x", "n", "tok")
+    _, _, data = _get(http, "/files/a.html")
+    assert data.decode("utf-8").count("anno-viewer.js") == 1
+
+
+def test_files_viewer_injected_without_body_tag(http_with_files):
+    """No </body> → tag goes before </html>; neither → appended."""
+    from agent_html_drop.storage import annotations as anno_store
+    http, _, docroot = http_with_files
+    (docroot / "b.html").write_text("<html><p>hi</p></html>", encoding="utf-8")
+    anno_store.add(docroot, "b.html", "hi", "n", "tok")
+    _, _, data = _get(http, "/files/b.html")
+    text = data.decode("utf-8")
+    assert '<script src="/anno-viewer.js"' in text
+    assert text.count('<script src="/anno-viewer.js"') == 1

@@ -200,7 +200,53 @@ code {
   padding: 12px;
   overflow-y: auto;
   font-size: 13px;
+  transition: transform 0.2s ease;
 }
+
+/* Collapsed (user-folded OR nothing relevant to show): slide off-screen.
+   pointer-events:none so the hidden panel never blocks clicks beneath it. */
+#anno-sidebar.collapsed {
+  transform: translateX(100%);
+  pointer-events: none;
+}
+
+/* Header action cluster (refresh + collapse) replaces the lone refresh btn. */
+.sidebar-actions {
+  display: flex;
+  gap: 4px;
+}
+
+#anno-collapse {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+#anno-collapse:hover { background: var(--bg-elev); }
+
+/* Thin vertical "批注" tab pinned to the right edge when the panel is
+   folded — the only way back in once collapsed. */
+#anno-opener {
+  position: fixed;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 15;
+  writing-mode: vertical-rl;
+  padding: 12px 4px;
+  background: var(--bg-elev);
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-right: 0;
+  border-radius: 4px 0 0 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+#anno-opener:hover { background: var(--bg); }
 
 #anno-sidebar header {
   display: flex;
@@ -359,4 +405,39 @@ code {
 }
 #file-table td a:hover {
   text-decoration: underline;
+}
+
+/* --- preview toolbar / iframe TOC (大纲) toggle ---
+   Parent-side: the preview iframe is sandboxed without allow-scripts, so
+   the md→html theme's own JS can't run there — the parent toggles its
+   <aside class="sidebar"> directly. */
+.preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.preview-head h2 {
+  margin: 0;
+}
+
+#toc-toggle {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#toc-toggle:hover { background: var(--bg-elev); }
+/* aria-pressed="true" = TOC currently hidden */
+#toc-toggle[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+#toc-toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
 }

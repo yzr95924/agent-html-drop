@@ -62,19 +62,27 @@
     </section>
 
     <section id="preview-section" hidden>
-      <h2>预览 <span id="preview-name"></span></h2>
+      <div class="preview-head">
+        <h2>预览 <span id="preview-name"></span></h2>
+        <button id="toc-toggle" type="button" aria-pressed="false" title="显示/隐藏目录侧栏">大纲</button>
+      </div>
       <iframe id="preview-frame" sandbox="allow-same-origin" title="preview"></iframe>
     </section>
   </main>
 
-  <aside id="anno-sidebar" aria-label="批注" hidden>
+  <aside id="anno-sidebar" aria-label="批注" class="collapsed">
     <header>
       <h3 id="anno-sidebar-title">批注</h3>
-      <button id="anno-sidebar-refresh" type="button" aria-label="刷新">↻</button>
+      <div class="sidebar-actions">
+        <button id="anno-sidebar-refresh" type="button" aria-label="刷新">↻</button>
+        <button id="anno-collapse" type="button" aria-label="收起批注栏" title="收起">›</button>
+      </div>
     </header>
     <ul id="anno-list"></ul>
     <p id="anno-empty" hidden>暂无批注</p>
   </aside>
+
+  <button id="anno-opener" type="button" aria-label="展开批注栏" title="展开批注栏" hidden>批注 ‹</button>
 
   <div id="toast" hidden></div>
 

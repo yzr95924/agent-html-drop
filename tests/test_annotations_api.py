@@ -196,6 +196,50 @@ def test_auth_missing_header_returns_401(http_server):
         conn.close()
 
 
+def test_get_api_auth_reports_session_status(http_server):
+    """GET /api/auth: 204 with a valid cookie, 401 without — lets the UI
+    skip the token dialog after a refresh (the HttpOnly cookie is
+    JS-unreadable, so it must ask the server)."""
+    from agent_html_drop.auth_anno import ANNO_COOKIE_NAME
+
+    srv, cfg = http_server
+    host, port = srv.server_address
+
+    # No cookie → 401.
+    conn, response = _get(host, port, "/api/auth")
+    try:
+        assert response.status == 401
+    finally:
+        response.read()
+        conn.close()
+
+    # Obtain a cookie via POST /api/auth.
+    conn, response = _post(
+        host, port, "/api/auth", headers={"Authorization": "Bearer " + cfg.token}
+    )
+    try:
+        cookie = SimpleCookie()
+        cookie.load(response.getheader("Set-Cookie"))
+        cookie_value = cookie[ANNO_COOKIE_NAME].value
+    finally:
+        response.read()
+        conn.close()
+
+    # Same cookie on GET → 204 (status read does NOT reissue the cookie).
+    conn, response = _get(
+        host,
+        port,
+        "/api/auth",
+        headers={"Cookie": ANNO_COOKIE_NAME + "=" + cookie_value},
+    )
+    try:
+        assert response.status == 204
+        assert response.getheader("Set-Cookie") is None
+    finally:
+        response.read()
+        conn.close()
+
+
 def test_list_files_includes_annotation_count_zero(http_server):
     srv, _ = http_server
     host, port = srv.server_address

@@ -118,6 +118,43 @@ def test_load_config_rejects_non_string_host(tmp_path):
         load_config(p)
 
 
+def test_anno_session_max_age_round_trip(tmp_path):
+    cfg = Config(
+        token="x" * 64,
+        docroot="/srv/n",
+        port=9000,
+        anno_session_max_age=3600,
+    )
+    p = tmp_path / "config.toml"
+    save_config(p, cfg)
+    loaded = load_config(p)
+    assert loaded.anno_session_max_age == 3600
+
+
+def test_anno_session_max_age_defaults_to_30_minutes():
+    assert Config(token="x" * 64).anno_session_max_age == 1800
+
+
+def test_load_config_rejects_non_int_anno_session_max_age(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text(
+        'host = "127.0.0.1"\n'
+        'port = 8765\n'
+        'docroot = "/var/www/notes"\n'
+        'public_base_url = "https://notes.example.com"\n'
+        'max_file_size = 52428800\n'
+        'anno_session_max_age = "1800"\n'  # wrong type
+    )
+    with pytest.raises(InvalidConfig):
+        load_config(p)
+
+
+def test_validate_for_serve_rejects_non_positive_anno_session_max_age():
+    cfg = Config(token="x" * 64, docroot="/srv/n", anno_session_max_age=0)
+    with pytest.raises(InvalidConfig):
+        validate_for_serve(cfg)
+
+
 # --- save_config -------------------------------------------------------------
 
 def test_save_config_creates_parent_directory(tmp_path):

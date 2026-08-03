@@ -8,6 +8,7 @@ Three groups (design §7.3 / §8 / §15.3.1):
     GET    /api/nginx-config                    rendered reverse-proxy snippet
     GET    /api/health                          liveness probe (no auth)
     POST   /api/auth                            Bearer → annotation session cookie
+    GET    /api/auth                            session cookie valid? (204/401)
 
   Annotation REST (cookie + CSRF, except GET is public):
     GET    /api/files/<name>/annotations        list (no auth)
@@ -30,7 +31,6 @@ from agent_html_drop import server as srv
 from agent_html_drop import _legacy_storage as storage
 from agent_html_drop.auth import check_bearer
 from agent_html_drop.auth_anno import (
-    ANNO_COOKIE_MAX_AGE,
     ANNO_COOKIE_NAME,
     cookie_set_header,
     csrf_check,
@@ -279,21 +279,39 @@ def _make_list_files(cfg: Config):
 
 def _make_auth(cfg: Config):
     """Exchange a valid Bearer token for an annotation session cookie."""
+    max_age = cfg.anno_session_max_age
+
     def handler(req, params, body):
         if not check_bearer(req.headers.get("Authorization"), cfg.token):
             return _unauthorized()
-        cookie_value = sign_cookie(cfg.token, max_age=ANNO_COOKIE_MAX_AGE)
+        cookie_value = sign_cookie(cfg.token, max_age=max_age)
         return (
             204,
             b"",
             {
                 "Set-Cookie": cookie_set_header(
                     cookie_value,
-                    ANNO_COOKIE_MAX_AGE,
+                    max_age,
                     secure=not cfg.allow_insecure_annotations,
                 )
             },
         )
+    return handler
+
+
+def _make_auth_status(cfg: Config):
+    """GET /api/auth — is there a valid annotation session cookie?
+
+    The cookie is HttpOnly (JS can't read it), so the UI can't tell from
+    ``document.cookie`` whether it's still logged in after a refresh. This
+    endpoint lets it ask the server: 204 = valid session (skip the token
+    dialog), 401 = no/expired session (prompt for the token).
+    """
+
+    def handler(req, params, body):
+        if _anno_session_token(req):
+            return (204, b"", {})
+        return (401, _err("unauthorized", "no valid anno session"), JSON)
     return handler
 
 
@@ -333,6 +351,27 @@ def _health_handler(req, params, body):
     return (200, json.dumps(payload).encode("utf-8"), JSON)
 
 
+# <script> tag injected into annotated public pages so the read-only
+# annotation viewer (ui/anno-viewer.js) loads on the public URL itself,
+# letting visitors see highlights + comments without the management page.
+_ANNO_VIEWER_TAG = '<script src="/anno-viewer.js" defer></script>'
+
+
+def _inject_viewer(html: str) -> str:
+    """Insert the public annotation-viewer <script> once, as late as the
+    document allows (``</body>`` → ``</html>`` → append). Idempotent — a
+    page that already references the viewer is returned unchanged."""
+    if "anno-viewer.js" in html:
+        return html
+    lowered = html.lower()
+    idx = lowered.find("</body>")
+    if idx < 0:
+        idx = lowered.find("</html>")
+    if idx < 0:
+        return html + _ANNO_VIEWER_TAG
+    return html[:idx] + _ANNO_VIEWER_TAG + html[idx:]
+
+
 def _make_get_file(cfg: Config):
     """GET /files/<name> — daemon-served public HTML (design §15.3.1).
 
@@ -359,6 +398,19 @@ def _make_get_file(cfg: Config):
             return _NOT_FOUND
         if not target.is_file():
             return _NOT_FOUND
+        # Public annotation viewer: when this file has annotations, inject a
+        # read-only <script src="/anno-viewer.js"> so visitors of the public
+        # URL see highlights + comments instead of bare HTML. Files without
+        # annotations stream unchanged (no per-request overhead, no viewer).
+        if anno_store.count(docroot, name) > 0:
+            try:
+                text = target.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                # Binary / undecodable — serve raw, skip the viewer.
+                req.send_file(str(target), "text/html; charset=utf-8")
+                return (200, srv.STREAMED, {})
+            injected = _inject_viewer(text).encode("utf-8")
+            return (200, injected, {"Content-Type": "text/html; charset=utf-8"})
         req.send_file(str(target), "text/html; charset=utf-8")
         return (200, srv.STREAMED, {})
 
@@ -374,6 +426,7 @@ def register_routes(cfg: Config) -> None:
     srv.register("GET", r"^/api/nginx-config$", _make_nginx_config(cfg))
     srv.register("GET", r"^/api/health$", _health_handler)
     srv.register("POST", r"^/api/auth$", _make_auth(cfg))
+    srv.register("GET", r"^/api/auth$", _make_auth_status(cfg))
     # Annotation REST endpoints.
     srv.register("GET",
                  r"^/api/files/(?P<name>[^/]+)/annotations$",

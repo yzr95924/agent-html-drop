@@ -12,6 +12,7 @@ Routes:
   - ``GET /``         → ``ui/index.html``
   - ``GET /style.css``→ ``ui/style.css``
   - ``GET /app.js``   → ``ui/app.js``
+  - ``GET /anno-viewer.js`` → ``ui/anno-viewer.js`` (public-page annotation viewer)
 """
 import os
 
@@ -25,6 +26,7 @@ _FILES = {
     "/": "index.html",
     "/style.css": "style.css",
     "/app.js": "app.js",
+    "/anno-viewer.js": "anno-viewer.js",
 }
 
 _TEXT_HTML = {"Content-Type": "text/html; charset=utf-8"}
@@ -35,6 +37,7 @@ _CONTENT_TYPE_FOR = {
     "index.html": _TEXT_HTML,
     "style.css": _TEXT_CSS,
     "app.js": _TEXT_JS,
+    "anno-viewer.js": _TEXT_JS,
 }
 
 

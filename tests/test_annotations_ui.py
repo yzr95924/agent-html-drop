@@ -53,6 +53,18 @@ def test_app_js_does_not_allow_scripts_in_iframe():
     assert "allow-scripts" not in js
 
 
+def test_app_js_probes_session_before_prompting():
+    """Refresh / clicking 批注 must GET /api/auth first and skip the token
+    dialog when the HttpOnly session cookie is still valid — the cookie is
+    JS-unreadable, so the server must be asked. The token dialog is only the
+    fallback for when the probe returns non-204."""
+    js = (UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "probeSession" in js
+    assert "/api/auth" in js
+    # Dialog is the FALLBACK (second arg), not the default action.
+    assert "probeSession(enterAnnoMode, openTokenDialog)" in js
+
+
 # --- F22: iframe selection → POST annotation creation ---
 
 def test_index_has_add_dialog():
@@ -116,3 +128,42 @@ def test_app_js_unwraps_before_rehighlight():
     # Idempotency: stale marks are unwrapped (and text re-merged) first.
     assert "unwrapMarks" in js
     assert ".normalize()" in js
+
+
+# --- public-page viewer (anno-viewer.js): read-only mirror of the highlight ---
+
+def test_anno_viewer_is_read_only():
+    """The public-page viewer only READS annotations (public GET) — it must
+    never call a write route. Writes need the anno session cookie, which only
+    the management page's token flow can mint; a public visitor has none."""
+    js = (UI_DIR / "anno-viewer.js").read_text(encoding="utf-8")
+    assert "/annotations" in js
+    assert "buildTextMap" in js  # shares the highlight algorithm
+    assert 'method: "POST"' not in js
+    assert '"DELETE"' not in js
+    assert "PATCH" not in js
+    # Never sends a credential — public read only.
+    assert "credentials" in js and '"omit"' in js
+
+
+def test_anno_viewer_derives_filename_from_pathname():
+    """The viewer runs on /files/<name>.html and must derive <name> from its
+    own URL (location.pathname) — the daemon injects just a bare <script>,
+    no per-file data, so there's nothing to leak or mis-sync."""
+    js = (UI_DIR / "anno-viewer.js").read_text(encoding="utf-8")
+    assert "location.pathname" in js
+    assert "/files/" in js
+    assert "decodeURIComponent" in js
+
+
+def test_mark_color_matches_between_preview_and_public_viewer():
+    """The preview iframe (app.js) and the public page (anno-viewer.js) must
+    highlight annotation <mark>s the SAME color — otherwise the two views of
+    the same annotation look inconsistent. Both inject the identical rule
+    (the iframe can't inherit the management page CSS, and the md→html theme
+    has no `mark` rule, so each view must inject it itself)."""
+    color = "rgba(255,196,0,.32)"
+    app = (UI_DIR / "app.js").read_text(encoding="utf-8")
+    viewer = (UI_DIR / "anno-viewer.js").read_text(encoding="utf-8")
+    assert color in app, "app.js no longer injects the shared mark color"
+    assert color in viewer, "anno-viewer.js no longer injects the shared mark color"

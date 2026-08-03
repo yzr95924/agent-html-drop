@@ -24,11 +24,15 @@ services:
       # 渲染公开文件 URL 用的 origin。本机 demo 保持 localhost 即可;
       # 要给同网段设备访问,改成 http://<你的局域网 IP>:8765,复制出的
       # URL 才会指对地方。
-      PUBLIC_BASE_URL: "http://localhost:8765"
+      PUBLIC_BASE_URL: "http://192.168.100.210:8765"
       # demo 必须开:没有 TLS 终结者时,批注 session cookie 需要去掉
       # `Secure`、CSRF 需要接受 http:// Origin,否则浏览器批注写不进去。
       # (设计默认 "0" = 强制 HTTPS,见 §15。)
       ALLOW_INSECURE_ANNOTATIONS: "1"
+      # 批注 session cookie 寿命(秒)。demo 调长到 30 天,刷新浏览器 / 重开
+      # 标签页都不用重输 token(cookie 没过期就行)——UI 先 GET /api/auth
+      # 探测会话,有效就跳过 token 框。生产默认 1800(30 分钟),见 §15。
+      ANNO_SESSION_MAX_AGE: "2592000"
     ports:
       # DEMO:直接绑 0.0.0.0,网络内任何人可访问。
       - "8765:8765"

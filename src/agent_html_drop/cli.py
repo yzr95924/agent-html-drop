@@ -109,6 +109,24 @@ def cmd_serve(args) -> int:
             file=sys.stderr,
         )
 
+    # Runtime env override: ANNO_SESSION_MAX_AGE bumps the annotation session
+    # cookie lifetime (default 1800s / 30 min). Convenience for long review
+    # sessions so the UI's session probe (GET /api/auth) keeps returning 204
+    # across refreshes for longer; the cookie is HttpOnly, so this never
+    # exposes the bearer token to JS. Unset → fall back to the TOML value.
+    env_max_age = os.environ.get("ANNO_SESSION_MAX_AGE")
+    if env_max_age is not None and env_max_age.strip():
+        try:
+            cfg.anno_session_max_age = int(env_max_age)
+        except ValueError:
+            print(
+                "Error: ANNO_SESSION_MAX_AGE must be an integer, got {!r}".format(
+                    env_max_age
+                ),
+                file=sys.stderr,
+            )
+            return 2
+
     # Wire config into runtime.
     srv.Handler.max_body_size = cfg.max_file_size
     mcp_handler.register_route(cfg)

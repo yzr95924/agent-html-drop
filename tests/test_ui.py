@@ -1,6 +1,7 @@
 """Smoke tests for the management page UI assets + handler."""
 import http.client
 import os
+import re
 import threading
 
 import pytest
@@ -85,8 +86,15 @@ def test_serves_app_js(ui_server):
     status, headers, body = _get(ui_server, "/app.js")
     assert status == 200
     assert "javascript" in headers.get("Content-Type", "")
-    # Read-only for file list; anno mode uses Bearer in dialog only.
-    assert b"localStorage" not in body
+
+
+def test_serves_anno_viewer_js(ui_server):
+    """The public-page annotation viewer is served as a static asset at
+    /anno-viewer.js (injected into annotated /files/*.html by the daemon)."""
+    status, headers, body = _get(ui_server, "/anno-viewer.js")
+    assert status == 200
+    assert "javascript" in headers.get("Content-Type", "")
+    assert b"buildTextMap" in body  # the highlight core is present
 
 
 # --- no auth required on / --------------------------------------------------
@@ -115,13 +123,25 @@ def test_index_has_no_token_ui(ui_server):
 
 
 def test_app_js_does_not_store_token(ui_server):
-    """The JS must not persist the token to any storage. Bearer is sent
-    only as a one-shot Authorization header during the /api/auth login
-    flow; nothing is kept client-side."""
+    """The bearer token must NEVER be persisted client-side — it's a one-shot
+    Authorization header in the /api/auth login flow. localStorage is permitted
+    ONLY for non-credential layout prefs (sidebar fold state). All storage
+    access is funneled through the lsBool/lsSetBool helpers, and the only keys
+    ever used are the layout-pref allowlist below — so the token can't reach it."""
     _, _, body = _get(ui_server, "/app.js")
     text = body.decode("utf-8")
-    assert "localStorage" not in text
+    # sessionStorage is never used.
     assert "sessionStorage" not in text
+    # Single chokepoint: storage is touched in exactly one read + one write
+    # (inside the helpers). A second site would bypass the key allowlist.
+    assert text.count("localStorage.getItem") == 1
+    assert text.count("localStorage.setItem") == 1
+    # The only storage keys are non-credential layout prefs — never the token.
+    allowed = {"agent-html-drop:annoCollapsed", "agent-html-drop:tocHidden"}
+    used = set(re.findall(r'"(agent-html-drop:[\w-]+)"', text))
+    assert used <= allowed, "unexpected localStorage keys: %r" % (used - allowed)
+    # Belt-and-suspenders: the auth token never reaches a storage write.
+    assert "lsSetBool(token" not in text
 
 
 def test_app_js_handles_401_as_version_mismatch(ui_server):
