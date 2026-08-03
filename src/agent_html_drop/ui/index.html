@@ -29,6 +29,21 @@
     </form>
   </dialog>
 
+  <dialog id="anno-add-dialog" aria-labelledby="anno-add-title">
+    <form method="dialog" id="anno-add-form">
+      <h2 id="anno-add-title">添加批注</h2>
+      <blockquote id="anno-add-quote"></blockquote>
+      <p id="anno-add-truncated" class="hint" hidden>选中内容过长,已截断为前 200 字符</p>
+      <textarea id="anno-add-comment" rows="4" maxlength="2000"
+        placeholder="写下你的批注…"></textarea>
+      <menu>
+        <button type="button" id="anno-add-cancel">取消</button>
+        <button type="submit" id="anno-add-submit">提交</button>
+      </menu>
+      <p id="anno-add-error" class="error" hidden></p>
+    </form>
+  </dialog>
+
   <main>
     <section id="files-section">
       <h2>文件</h2>
@@ -62,6 +77,8 @@
   </aside>
 
   <div id="toast" hidden></div>
+
+  <button id="anno-add-fab" type="button" hidden>＋ 批注</button>
 
   <script src="/app.js"></script>
 </body>

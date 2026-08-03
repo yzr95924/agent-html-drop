@@ -73,7 +73,7 @@ src/
     ├── _compat.py             TOML loader (tomllib/tomli) + 手写 dumper
     ├── assets/
     │   └── nginx.conf.template  nginx server block 模板(含 /api/auth limit_req)
-    └── ui/                    管理页静态资源 (vanilla JS;批注模式状态机 + iframe <mark> 注入)
+    └── ui/                    管理页静态资源 (vanilla JS;批注模式状态机 + iframe <mark> 注入 + 选区→批注提交)
 ```
 
 ### 形态要点

@@ -257,6 +257,99 @@ code {
   border-color: var(--danger);
 }
 
+/* --- annotation creation (F22: iframe selection → POST) --- */
+
+/* Floating "＋ 批注" button, positioned over the preview iframe near the
+   current selection. Lives in the parent document (iframe CSS can't reach
+   it, per §9.3 iframe isolation); fixed-positioned in viewport coords. */
+#anno-add-fab {
+  position: fixed;
+  z-index: 20;
+  background: var(--accent);
+  color: var(--bg);
+  border: 0;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+#anno-add-fab:hover { opacity: 0.85; }
+
+#anno-add-dialog {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 20px;
+  min-width: 360px;
+  max-width: 480px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+#anno-add-dialog::backdrop { background: rgba(0,0,0,0.4); }
+
+#anno-add-quote {
+  margin: 8px 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--accent);
+  font-style: italic;
+  color: var(--fg-dim);
+  font-size: 12px;
+  max-height: 96px;
+  overflow-y: auto;
+  word-break: break-all;
+}
+
+#anno-add-truncated {
+  margin: 4px 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+#anno-add-comment {
+  display: block;
+  width: 100%;
+  padding: 6px;
+  margin: 8px 0;
+  font-family: inherit;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  resize: vertical;
+}
+
+#anno-add-dialog menu {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+#anno-add-dialog button {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+#anno-add-dialog button[type="submit"] {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+#anno-add-dialog .error {
+  color: var(--danger);
+  margin-top: 8px;
+  font-size: 12px;
+}
+
 /* File table — filename column renders as <a>; without this it falls back
    to the user-agent default (#0000EE in Chrome), which is unreadable on
    the dark --bg #0f1115. Use --accent (#5da7ff, ~8.4:1 on bg) instead. */

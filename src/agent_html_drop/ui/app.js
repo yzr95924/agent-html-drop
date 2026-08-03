@@ -238,6 +238,8 @@
       $annoModeHint.hidden = true;
       $annoSidebar.hidden = true;
       clearAnnoList();
+      pendingQuote = null;
+      hideAddFab();
     }
   }
 
@@ -380,20 +382,39 @@
   }
 
   // --- iframe `<mark>` injection ------------------------------------
+  //
+  // Document-level text map: concatenate all text nodes, find the
+  // (whitespace-normalized) quote in the concatenated text, then map the
+  // match back to (node, offset) ranges and wrap each piece in its own
+  // <mark>. This highlights quotes that SPAN element boundaries (<b>,
+  // paragraphs, …) — the old single-text-node search couldn't.
+  //
+  // Details:
+  // - A synthetic space is inserted in the concatenated text between two
+  //   text nodes whose NEAREST BLOCK ancestor differs (p / div / li / td
+  //   / …) — mirroring how getSelection().toString() puts newlines at
+  //   block boundaries but not at inline ones. (Residual gap: <br> inside
+  //   a single block isn't treated as a boundary.)
+  // - All occurrences of a quote are located in ONE map pass, then
+  //   wrapped RIGHT-TO-LEFT so earlier offsets stay valid (splitText
+  //   truncates the original node in place, so a shared node still works).
+  // - Text already inside a <mark> is NOT excluded: overlapping
+  //   annotations of the same span both highlight (marks nest, valid
+  //   HTML) instead of the later one being falsely flagged ⚠️.
+  // - Each run first unwraps ALL existing marks (and parent.normalize()
+  //   re-merges the split text nodes), so re-highlighting is idempotent:
+  //   no progressive nesting on repeat refreshes, and marks of deleted
+  //   annotations disappear instead of going stale.
+
+  var BLOCK_RE = /^(P|DIV|H1|H2|H3|H4|H5|H6|LI|DT|DD|TD|TH|TR|TABLE|SECTION|ARTICLE|HEADER|FOOTER|BLOCKQUOTE|PRE|UL|OL|DL|FIGURE|FIGCAPTION|FORM|FIELDSET|NAV|ASIDE|MAIN|HR)$/;
 
   function highlightIframe() {
     if (!$previewFrame || !$previewFrame.contentDocument) return;
     var doc = $previewFrame.contentDocument;
+    if (!doc.body) return;
+    unwrapMarks(doc);
     annoEntries.forEach(function (e) {
-      var found = false;
-      var walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
-      var node;
-      while ((node = walker.nextNode())) {
-        if (normalize(node.nodeValue).indexOf(normalize(e.quote)) !== -1) {
-          wrapTextMatch(node, normalize(e.quote), e.id);
-          found = true;
-        }
-      }
+      var found = highlightQuote(doc, e);
       if (!found) {
         var li = $annoList.querySelector('li[data-anno-id="' + cssEscape(e.id) + '"]');
         if (li) li.classList.add("invalid");
@@ -401,49 +422,271 @@
     });
   }
 
-  function wrapTextMatch(textNode, normalizedQuote, annoId) {
-    // Walk back to find the literal substring in the actual nodeValue (preserving
-    // surrounding whitespace). Strategy: find the first index where
-    // normalize(nodeValue.substring(i, i + normalizedQuote.length)) == normalizedQuote.
-    var s = textNode.nodeValue;
-    var i = findNormalizedMatch(s, normalizedQuote);
-    if (i < 0) return;
-    var matchedText = s.substr(i, normalizedQuote.length + slack(s, i, normalizedQuote.length));
-    var before = s.slice(0, i);
-    var after = s.slice(i + matchedText.length);
-    var mark = textNode.ownerDocument.createElement("mark");
-    mark.setAttribute("data-anno-id", annoId);
-    mark.appendChild(textNode.ownerDocument.createTextNode(matchedText));
-    var parent = textNode.parentNode;
-    parent.insertBefore(textNode.ownerDocument.createTextNode(before), textNode);
-    parent.insertBefore(mark, textNode);
-    parent.insertBefore(textNode.ownerDocument.createTextNode(after), textNode);
-    parent.removeChild(textNode);
+  function unwrapMarks(doc) {
+    // querySelectorAll is a STATIC list — safe to mutate while iterating.
+    var marks = doc.querySelectorAll("mark[data-anno-id]");
+    for (var i = 0; i < marks.length; i++) {
+      var m = marks[i];
+      var p = m.parentNode;
+      if (!p) continue;
+      while (m.firstChild) p.insertBefore(m.firstChild, m);
+      p.removeChild(m);
+      p.normalize(); // merge text nodes re-adjoined by the unwrap
+    }
   }
 
-  function findNormalizedMatch(s, normalizedQuote) {
-    // Brute-force linear scan; acceptable for small/medium pages.
-    for (var i = 0; i <= s.length - normalizedQuote.length; i++) {
-      if (normalize(s.substr(i, normalizedQuote.length)) === normalizedQuote) {
-        return i;
+  // Wrap every occurrence of entry.quote; returns true if at least one
+  // was found (drives the sidebar ⚠️ flag).
+  function highlightQuote(doc, entry) {
+    var quote = normalize(entry.quote);
+    if (!quote) return false;
+    var map = buildTextMap(doc);
+    var matches = [];
+    var from = 0;
+    while (matches.length < 500) { // 500: cap for pathological tiny quotes
+      var idx = map.norm.indexOf(quote, from);
+      if (idx < 0) break;
+      matches.push(idx);
+      from = idx + quote.length; // occurrences never overlap each other
+    }
+    for (var i = matches.length - 1; i >= 0; i--) {
+      wrapRange(doc, map, matches[i], matches[i] + quote.length, entry.id);
+    }
+    return matches.length > 0;
+  }
+
+  // Concatenate text nodes (document order) into one string, plus a
+  // whitespace-collapsed variant with a per-char index map back into the
+  // raw string.
+  function buildTextMap(doc) {
+    var walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
+    var nodes = [];
+    var starts = []; // raw offset where each node's text begins
+    var raw = "";
+    var prevBlock = null;
+    var node;
+    while ((node = walker.nextNode())) {
+      var block = nearestBlock(node);
+      if (prevBlock !== null && block !== prevBlock) {
+        raw += " "; // synthetic block-boundary separator (see header note)
+      }
+      prevBlock = block;
+      nodes.push(node);
+      starts.push(raw.length);
+      raw += node.nodeValue;
+    }
+    // Collapse \s+ runs to a single space, remembering for every
+    // normalized char which raw char it came from. (No trim — offsets
+    // must stay aligned; the quote itself is already trimmed.)
+    var norm = "";
+    var normToRaw = [];
+    var inSpace = false;
+    for (var i = 0; i < raw.length; i++) {
+      if (/\s/.test(raw.charAt(i))) {
+        if (!inSpace) {
+          norm += " ";
+          normToRaw.push(i);
+          inSpace = true;
+        }
+      } else {
+        norm += raw.charAt(i);
+        normToRaw.push(i);
+        inSpace = false;
       }
     }
-    return -1;
+    return { nodes: nodes, starts: starts, norm: norm, normToRaw: normToRaw };
   }
 
-  function slack(s, i, baseLen) {
-    // How many extra chars can we safely include beyond the normalized length
-    // so we don't cut a word? Extend forward while the next char is whitespace.
-    var extra = 0;
-    while (i + baseLen + extra < s.length && /\s/.test(s.charAt(i + baseLen + extra))) {
-      extra++;
+  function nearestBlock(node) {
+    var el = node.parentElement;
+    while (el) {
+      if (BLOCK_RE.test(el.tagName)) return el;
+      el = el.parentElement;
     }
-    return extra;
+    return null;
+  }
+
+  // Wrap the raw-text range corresponding to normalized [nStart, nEnd).
+  // The quote starts and ends on non-whitespace (it's trimmed), so both
+  // endpoints land on real chars in text nodes (never on a synthetic
+  // separator); everything raw between them — collapsed whitespace runs,
+  // separators, element boundaries — is spanned by the wrap.
+  function wrapRange(doc, map, nStart, nEnd, annoId) {
+    var rStart = map.normToRaw[nStart];
+    var rEnd = map.normToRaw[nEnd - 1] + 1;
+    for (var i = 0; i < map.nodes.length; i++) {
+      var node = map.nodes[i];
+      var s = map.starts[i];
+      var len = node.nodeValue.length;
+      if (s + len <= rStart) continue;
+      if (s >= rEnd) break;
+      var localStart = Math.max(0, rStart - s);
+      var localEnd = Math.min(len, rEnd - s);
+      if (localEnd <= localStart) continue;
+      // splitText twice isolates [localStart, localEnd) as its own node.
+      var middle = node.splitText(localStart);
+      middle.splitText(localEnd - localStart);
+      var mark = doc.createElement("mark");
+      mark.setAttribute("data-anno-id", annoId);
+      middle.parentNode.insertBefore(mark, middle);
+      mark.appendChild(middle);
+    }
   }
 
   function cssEscape(s) {
     return String(s).replace(/(["\\])/g, "\\$1");
   }
+
+  /* === annotation creation (F22: iframe selection → POST) ==========
+   *
+   * Flow (design.md S37): in anno mode, user selects text inside the
+   * preview iframe → a floating "＋ 批注" button appears next to the
+   * selection → click opens a dialog (quote preview + comment textarea)
+   * → POST /api/files/<name>/annotations → refresh list + re-highlight.
+   *
+   * The fab lives in the PARENT document (§9.3 iframe isolation), so its
+   * position is computed as iframe-viewport-rect + range-rect, both
+   * viewport-relative → position: fixed coordinates line up.
+   */
+
+  var MAX_QUOTE_LEN = 200; // mirrors storage/annotations.py _MAX_QUOTE_LEN
+
+  var $annoAddFab = document.getElementById("anno-add-fab");
+  var $annoAddDialog = document.getElementById("anno-add-dialog");
+  var $annoAddForm = document.getElementById("anno-add-form");
+  var $annoAddQuote = document.getElementById("anno-add-quote");
+  var $annoAddTruncated = document.getElementById("anno-add-truncated");
+  var $annoAddComment = document.getElementById("anno-add-comment");
+  var $annoAddCancel = document.getElementById("anno-add-cancel");
+  var $annoAddError = document.getElementById("anno-add-error");
+
+  // Quote captured at selectionchange time — clicking the fab may collapse
+  // the iframe selection, so we never re-read it at dialog-open time.
+  var pendingQuote = null;
+  var pendingTruncated = false;
+
+  function iframeSelection() {
+    var w = $previewFrame.contentWindow;
+    if (!w || !w.getSelection) return null;
+    return w.getSelection();
+  }
+
+  function hideAddFab() {
+    $annoAddFab.hidden = true;
+  }
+
+  function showAddFab(rangeRect) {
+    var fr = $previewFrame.getBoundingClientRect();
+    $annoAddFab.style.left = (fr.left + rangeRect.left) + "px";
+    $annoAddFab.style.top = (fr.top + rangeRect.bottom + 6) + "px";
+    $annoAddFab.hidden = false;
+  }
+
+  function onIframeSelectionChange() {
+    if (mode !== "anno" || !annoCurrentFile) {
+      pendingQuote = null;
+      hideAddFab();
+      return;
+    }
+    var sel = iframeSelection();
+    var text = sel && !sel.isCollapsed ? normalize(sel.toString()) : "";
+    if (!text || !sel.rangeCount) {
+      pendingQuote = null;
+      hideAddFab();
+      return;
+    }
+    pendingQuote = text.slice(0, MAX_QUOTE_LEN);
+    pendingTruncated = text.length > MAX_QUOTE_LEN;
+    showAddFab(sel.getRangeAt(0).getBoundingClientRect());
+  }
+
+  // Re-attach on every iframe load: the document (and its listeners) is
+  // discarded on navigation.
+  function attachSelectionListener() {
+    var doc = $previewFrame.contentDocument;
+    if (!doc) return;
+    doc.addEventListener("selectionchange", onIframeSelectionChange);
+    // Scroll invalidates the fab's fixed position; simplest correct
+    // behavior is to hide it (selection stays, re-select to re-show).
+    doc.addEventListener("scroll", hideAddFab, true);
+  }
+
+  function clearIframeSelection() {
+    var sel = iframeSelection();
+    if (sel) sel.removeAllRanges();
+  }
+
+  // mousedown + preventDefault: keep the iframe selection from collapsing
+  // before the dialog opens (quote is already captured, this is for UX).
+  $annoAddFab.addEventListener("mousedown", function (e) {
+    e.preventDefault();
+  });
+
+  $annoAddFab.addEventListener("click", function () {
+    if (!pendingQuote) return;
+    clearAddError();
+    $annoAddQuote.textContent = '"' + pendingQuote + '"';
+    $annoAddTruncated.hidden = !pendingTruncated;
+    $annoAddComment.value = "";
+    hideAddFab();
+    if (typeof $annoAddDialog.showModal === "function") {
+      $annoAddDialog.showModal();
+    } else {
+      $annoAddDialog.setAttribute("open", "");
+    }
+    $annoAddComment.focus();
+  });
+
+  function showAddError(msg) {
+    $annoAddError.textContent = msg;
+    $annoAddError.hidden = false;
+  }
+  function clearAddError() {
+    $annoAddError.textContent = "";
+    $annoAddError.hidden = true;
+  }
+
+  $annoAddCancel.onclick = function () {
+    $annoAddDialog.close();
+    clearIframeSelection();
+    pendingQuote = null;
+  };
+
+  $annoAddForm.onsubmit = function (e) {
+    e.preventDefault();
+    clearAddError();
+    var comment = $annoAddComment.value.trim();
+    if (!comment) {
+      showAddError("批注内容不能为空");
+      return;
+    }
+    if (!pendingQuote || !annoCurrentFile) {
+      showAddError("选区已失效,请重新选择文本");
+      return;
+    }
+    fetch("/api/files/" + encodeURIComponent(annoCurrentFile) + "/annotations", {
+      method: "POST",
+      credentials: credentials(),
+      headers: csrfHeaders(),
+      body: JSON.stringify({ quote: pendingQuote, comment: comment }),
+    }).then(function (r) {
+      if (r.status === 201) {
+        $annoAddDialog.close();
+        clearIframeSelection();
+        pendingQuote = null;
+        toast("批注已添加");
+        refreshAnnoList();
+      } else if (r.status === 401) {
+        showAddError("session 已过期,请退出批注模式重新进入");
+      } else {
+        return r.json().then(function (j) {
+          showAddError(j.message || ("提交失败 " + r.status));
+        });
+      }
+    }).catch(function () {
+      showAddError("网络错误,稍后重试");
+    });
+  };
 
   // --- hook into existing preview() (defined earlier in app.js) ---
   //
@@ -456,6 +699,11 @@
   $previewFrame.addEventListener("load", function () {
     var m = $previewName.textContent.match(/^\((.+)\)$/);
     if (m) annoCurrentFile = m[1];
+    // New document → old selection listeners are gone; re-attach and
+    // drop any stale fab from the previous page.
+    pendingQuote = null;
+    hideAddFab();
+    attachSelectionListener();
     if (mode === "anno") refreshAnnoList();
   });
 
@@ -464,6 +712,8 @@
     if ($previewSection.hidden) {
       annoCurrentFile = null;
       clearAnnoList();
+      pendingQuote = null;
+      hideAddFab();
     }
   });
   previewHiddenObserver.observe($previewSection, { attributes: true, attributeFilter: ["hidden"] });
