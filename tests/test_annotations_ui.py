@@ -167,3 +167,43 @@ def test_mark_color_matches_between_preview_and_public_viewer():
     viewer = (UI_DIR / "anno-viewer.js").read_text(encoding="utf-8")
     assert color in app, "app.js no longer injects the shared mark color"
     assert color in viewer, "anno-viewer.js no longer injects the shared mark color"
+
+
+# --- popover-first: panel folded by default, click a highlight to read -----
+
+
+def test_index_has_anno_popover():
+    html = (UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="anno-popover"' in html
+    assert 'id="anno-popover-close"' in html
+
+
+def test_views_default_panel_collapsed_so_it_does_not_cover_text():
+    """Both the preview (app.js) and the public page (anno-viewer.js) must
+    default their annotation panel to FOLDED, so a reader isn't covered on
+    load. Comments are read via the click popover instead. (A returning
+    visitor who explicitly opened it still gets their persisted choice.)"""
+    app = (UI_DIR / "app.js").read_text(encoding="utf-8")
+    viewer = (UI_DIR / "anno-viewer.js").read_text(encoding="utf-8")
+    assert "lsBool(LS_ANNO_COLLAPSED, true)" in app, "preview sidebar must default folded"
+    assert "lsBool(LS_COLLAPSED, true)" in viewer, "public panel must default folded"
+
+
+def test_views_show_popover_on_mark_click():
+    """Clicking a highlight pops a small comment bubble next to it — the
+    primary read UI now that the side panel is folded by default."""
+    app = (UI_DIR / "app.js").read_text(encoding="utf-8")
+    viewer = (UI_DIR / "anno-viewer.js").read_text(encoding="utf-8")
+    # preview: parent wires iframe marks → parent-page popover
+    assert "wireIframeMarks" in app and "showPreviewPopover" in app
+    # public page: marks → popover in the same document
+    assert "showPopover" in viewer and "wireMarks" in viewer
+
+
+def test_popover_renders_annotation_via_textcontent():
+    """Popover content is set with textContent (never innerHTML + annotation
+    data) — stored-XSS defense, same rule as the side panels."""
+    app = (UI_DIR / "app.js").read_text(encoding="utf-8")
+    viewer = (UI_DIR / "anno-viewer.js").read_text(encoding="utf-8")
+    assert "$popQuote.textContent" in app and "$popComment.textContent" in app
+    assert "$popQuote.textContent" in viewer and "$popComment.textContent" in viewer

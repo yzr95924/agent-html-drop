@@ -88,6 +88,14 @@
 
   <button id="anno-add-fab" type="button" hidden>＋ 批注</button>
 
+  <!-- click a highlight to read its comment in place (sidebar stays folded) -->
+  <div id="anno-popover" hidden role="dialog" aria-label="批注">
+    <button id="anno-popover-close" type="button" aria-label="关闭">×</button>
+    <div id="anno-popover-quote" class="ap-quote"></div>
+    <div id="anno-popover-comment" class="ap-comment"></div>
+    <div id="anno-popover-meta" class="ap-meta"></div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>

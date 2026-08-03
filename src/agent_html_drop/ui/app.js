@@ -210,7 +210,7 @@
     try { localStorage.setItem(key, val ? "1" : "0"); } catch (e) {}
   }
 
-  var annoCollapsed = lsBool(LS_ANNO_COLLAPSED, false);
+  var annoCollapsed = lsBool(LS_ANNO_COLLAPSED, true);
   var tocHidden = lsBool(LS_TOC_HIDDEN, false);
 
   // --- DOM refs (anno-specific) --------------------------------------
@@ -261,6 +261,7 @@
 
   function setMode(newMode) {
     mode = newMode;
+    hidePreviewPopover();
     if (mode === "anno") {
       $annoToggle.hidden = true;
       $annoModeHint.hidden = false;
@@ -283,9 +284,13 @@
   // Read mode with zero annotations stays out of the way.
   function applyAnnoSidebarVisibility() {
     var relevant = !!annoCurrentFile && (mode === "anno" || annoEntries.length > 0);
-    var wantVisible = !annoCollapsed && relevant;
+    // Anno mode treats the sidebar as the editing surface → show by default.
+    // Read mode keeps it folded (clear of the reading column) unless the
+    // user explicitly opened it; comments are read via the click popover.
+    var wantVisible = relevant && (mode === "anno" || !annoCollapsed);
     $annoSidebar.classList.toggle("collapsed", !wantVisible);
-    $annoOpener.hidden = !annoCollapsed;
+    $annoOpener.hidden = !(relevant && !wantVisible);
+    if ($annoCollapse) $annoCollapse.hidden = (mode === "anno");
   }
 
   function setAnnoCollapsed(c) {
@@ -497,7 +502,7 @@
     var s = doc.createElement("style");
     s.id = "ahd-anno-marks";
     s.textContent =
-      "mark[data-anno-id]{background:rgba(255,196,0,.32);border-radius:2px;padding:0 1px;}";
+      "mark[data-anno-id]{background:rgba(255,196,0,.32);border-radius:2px;padding:0 1px;cursor:pointer;}";
     head.appendChild(s);
   }
 
@@ -514,6 +519,7 @@
         if (li) li.classList.add("invalid");
       }
     });
+    wireIframeMarks(doc);
   }
 
   function unwrapMarks(doc) {
@@ -631,6 +637,81 @@
     return String(s).replace(/(["\\])/g, "\\$1");
   }
 
+  /* === annotation popover (read a comment without the covering sidebar) ===
+   *
+   * The sidebar defaults to folded in read mode so it never covers the
+   * document; the popover is the primary read UI. It lives in the PARENT
+   * document (the marks are inside the same-origin sandboxed iframe) and is
+   * positioned over the iframe via iframe-rect + mark-rect — the same
+   * coordinate scheme as the add-annotation FAB (§9.3).
+   */
+  var $annoPopover = document.getElementById("anno-popover");
+  var $popQuote = document.getElementById("anno-popover-quote");
+  var $popComment = document.getElementById("anno-popover-comment");
+  var $popMeta = document.getElementById("anno-popover-meta");
+  var popoverCurrent = null;
+
+  function entryById(id) {
+    for (var i = 0; i < annoEntries.length; i++) {
+      if (annoEntries[i].id === id) return annoEntries[i];
+    }
+    return null;
+  }
+
+  function hidePreviewPopover() {
+    if ($annoPopover) $annoPopover.hidden = true;
+    popoverCurrent = null;
+  }
+
+  function showPreviewPopover(entry, left, bottomY, topY, mark) {
+    if (!$annoPopover) return;
+    if (popoverCurrent === mark) { hidePreviewPopover(); return; }   // toggle
+    popoverCurrent = mark;
+    $popQuote.textContent = "“" + entry.quote + "”";
+    $popComment.textContent = entry.comment;
+    $popMeta.textContent = entry.author + " · "
+      + new Date(entry.ts * 1000).toISOString().slice(0, 16).replace("T", " ");
+    $annoPopover.hidden = false;
+    var pw = $annoPopover.offsetWidth, ph = $annoPopover.offsetHeight;
+    if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+    if (left < 8) left = 8;
+    var top = bottomY + 6;
+    if (top + ph > window.innerHeight - 8) top = topY - ph - 6;   // flip above
+    if (top < 8) top = 8;
+    $annoPopover.style.left = left + "px";
+    $annoPopover.style.top = top + "px";
+  }
+
+  function onIframeMarkClick(ev) {
+    ev.stopPropagation();   // keep the iframe-doc click-dismiss from firing
+    ev.preventDefault();
+    var mark = ev.currentTarget;
+    var entry = entryById(mark.getAttribute("data-anno-id"));
+    if (!entry) return;
+    var mr = mark.getBoundingClientRect();
+    var fr = $previewFrame.getBoundingClientRect();
+    showPreviewPopover(entry, fr.left + mr.left, fr.top + mr.bottom, fr.top + mr.top, mark);
+  }
+
+  function wireIframeMarks(doc) {
+    var marks = doc.querySelectorAll("mark[data-anno-id]");
+    for (var i = 0; i < marks.length; i++) {
+      marks[i].addEventListener("click", onIframeMarkClick);
+    }
+  }
+
+  if ($annoPopover) {
+    // clicks inside the popover (select text, close) must not dismiss it
+    $annoPopover.onclick = function (ev) { ev.stopPropagation(); };
+    var $popCloseBtn = document.getElementById("anno-popover-close");
+    if ($popCloseBtn) $popCloseBtn.onclick = hidePreviewPopover;
+    document.addEventListener("click", function (ev) {
+      if (!$annoPopover.hidden && !$annoPopover.contains(ev.target)) hidePreviewPopover();
+    });
+    document.addEventListener("keydown", function (ev) { if (ev.key === "Escape") hidePreviewPopover(); });
+    window.addEventListener("scroll", hidePreviewPopover, true);
+  }
+
   /* === annotation creation (F22: iframe selection → POST) ==========
    *
    * Flow (design.md S37): in anno mode, user selects text inside the
@@ -703,6 +784,8 @@
     // Scroll invalidates the fab's fixed position; simplest correct
     // behavior is to hide it (selection stays, re-select to re-show).
     doc.addEventListener("scroll", hideAddFab, true);
+    // A click that isn't on a mark (marks stopPropagation) dismisses the popover.
+    doc.addEventListener("click", hidePreviewPopover);
   }
 
   function clearIframeSelection() {
@@ -797,6 +880,7 @@
     // drop any stale fab from the previous page.
     pendingQuote = null;
     hideAddFab();
+    hidePreviewPopover();
     attachSelectionListener();
     applyTocToggle();        // re-apply TOC fold to the freshly loaded DOM
     refreshAnnoList();       // both modes: read-only in read mode, full in anno
@@ -809,6 +893,7 @@
       clearAnnoList();
       pendingQuote = null;
       hideAddFab();
+      hidePreviewPopover();
       applyAnnoSidebarVisibility();
     }
   });

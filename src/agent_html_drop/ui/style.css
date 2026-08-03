@@ -441,3 +441,51 @@ code {
   opacity: 0.4;
   cursor: default;
 }
+
+/* --- annotation popover (click a highlight to read its comment in place) ---
+   The sidebar defaults to folded in read mode so it never covers the
+   reading column; this popover is the primary way to read a comment. It
+   lives in the parent doc and floats over the preview iframe. */
+#anno-popover {
+  position: fixed;
+  z-index: 100000;
+  max-width: 340px;
+  min-width: 200px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  padding: 10px 30px 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+#anno-popover[hidden] { display: none; }
+#anno-popover .ap-quote {
+  color: var(--accent);
+  font-style: italic;
+  word-break: break-word;
+}
+#anno-popover .ap-comment {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+#anno-popover .ap-meta {
+  margin-top: 6px;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+#anno-popover-close {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+#anno-popover-close:hover { color: var(--fg); }
