@@ -214,13 +214,25 @@ class Handler(BaseHTTPRequestHandler):
 
 # --- entry point ------------------------------------------------------------
 
+class _Server(ThreadingHTTPServer):
+    """``ThreadingHTTPServer`` with a real accept backlog.
+
+    stdlib defaults ``request_queue_size = 5``, smaller than a browser's
+    per-origin connection pool (6+). One page load fires a burst of 4+
+    requests (``/``, ``style.css``, ``app.js``, ``/api/files``); SYNs beyond
+    the backlog get dropped and the client sees ``ERR_CONNECTION_TIMED_OUT``.
+    """
+
+    request_queue_size = 128
+
+
 def make_server(host: str, port: int, *, quiet: bool = False) -> ThreadingHTTPServer:
     """Build a ``ThreadingHTTPServer`` bound to ``(host, port)``.
 
     Use ``port=0`` to let the kernel assign an ephemeral port
     (essential for tests — never grab 8765 in CI).
     """
-    srv = ThreadingHTTPServer((host, port), Handler)
+    srv = _Server((host, port), Handler)
     srv.RequestHandlerClass.quiet = quiet
     return srv
 
