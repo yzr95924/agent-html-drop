@@ -93,18 +93,18 @@ tbody td button {
 tbody td button:hover { background: var(--bg); }
 
 /* Reading surface: the iframe IS the document. yzr-md-to-html ships
-   a GitHub-dark palette (#0d1117 body), so the container should sit on
-   a *very slightly* lifted dark surface — same family as the chrome
-   (#0f1115) but a step brighter, so the iframe reads as a "sheet" rather
-   than another window punched into the chrome. Without this lift the
-   iframe border disappears and the article feels disconnected.
-   - max-width 980 keeps the chrome from sprawling on wide viewports
-     (the article itself is centered at 880 by yzr-md-to-html)
-   - 78vh gives a long article some breathing room over the old 70vh */
+   a GitHub-dark palette (#0d1117 body), and that body itself is
+   centered at max-width 880. The container's job is just to give it
+   a *lifted* dark surface so the iframe border doesn't disappear into
+   the chrome — and to keep the chrome from sprawling to ridiculous
+   widths on 4K monitors. 1280 lets a 1366 laptop show the article
+   + sidebar without horizontal scroll, while a 1920 monitor still
+   caps the chrome's reach. The article's own 880 cap keeps line
+   length comfortable inside. */
 #preview-frame {
   display: block;
   width: 100%;
-  max-width: 980px;
+  max-width: 1280px;
   height: 78vh;
   margin: 0 auto;
   background: #1a1d24;        /* matches --bg-elev */
