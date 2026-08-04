@@ -1,0 +1,22 @@
+/* Annotation <mark> highlight style — shared between:
+ *   - ui/app.js (parent management page, injects this into the preview iframe)
+ *   - ui/anno-viewer.js (public-page viewer, injects this on the public URL)
+ *
+ * Single source of truth: the public annotation viewer and the management
+ * preview's iframe must render marks identically, or users will see one
+ * color in the management page and a different one on the public URL.
+ *
+ * Color tokens (kept as raw values, not --vars, because this file is
+ * loaded as a literal <link> in the iframe document and doesn't have
+ * access to the parent page's :root vars — see app.js
+ * ensureMarkStyle()).
+ */
+mark[data-anno-id] {
+  background: rgba(255, 196, 0, 0.32);
+  border-radius: 2px;
+  padding: 0 1px;
+  cursor: pointer;
+}
+mark[data-anno-id]:hover {
+  background: rgba(255, 196, 0, 0.48);
+}

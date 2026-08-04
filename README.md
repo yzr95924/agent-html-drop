@@ -87,7 +87,26 @@ docker compose exec agent-html-drop agent-html-drop nginx-config
 
 agent 可以调 6 个 tool：`upload_html` / `list_html` / `delete_html` / `get_public_url`
 / `list_annotations` / `delete_annotation`。
-配合 `yzr-md-to-html` 使用流程：`md2html file.md → upload_html(name="file.html", content=...)`。
+配合 `yzr-md-to-html` 使用流程：
+
+```bash
+# 1. 生成 HTML（agent shell）
+yzr-md-tohtml file.md > /tmp/file.html
+
+# 2. 流式上传 HTML 字节——不经过 LLM context
+SHA=$(sha256sum /tmp/file.html | cut -d' ' -f1)
+curl -X PUT -H "Authorization: Bearer $AGENT_HTML_DROP_TOKEN" \
+     --data-binary @/tmp/file.html \
+     "http://127.0.0.1:8765/files/file.html?force=true"
+# 响应：{"name":"file.html","url":"https://.../files/file.html","size":...,"sha256":...}
+
+# 3. MCP 上报（只传 ~80 字节元数据）—— LLM context 拿到 URL
+upload_html(name="file.html", sha256=$SHA)
+```
+
+`upload_html` 现在是**元数据校验** tool：HTML 字节走 `PUT /files/<name>`（Bearer 流式旁路），
+MCP 这一步只验证文件已落盘且 sha256 一致，再把 public URL 注入 LLM context。
+这样大 HTML 不再吃掉 LLM 的 token 预算。
 
 ## 命令一览
 

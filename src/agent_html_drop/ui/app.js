@@ -13,6 +13,7 @@
   // --- DOM refs ----------------------------------------------------------
   var $tbody = document.getElementById("file-tbody");
   var $empty = document.getElementById("empty-state");
+  var $loadError = document.getElementById("load-error");
   var $table = document.getElementById("file-table");
   var $previewSection = document.getElementById("preview-section");
   var $previewName = document.getElementById("preview-name");
@@ -62,11 +63,26 @@
     return (n / (1024 * 1024)).toFixed(1) + " MB";
   }
 
-  function fmtTime(unix) {
+  // Absolute timestamp — used as the title (tooltip) for relative time.
+  function fmtTimeAbs(unix) {
     var d = new Date(unix * 1000);
     var pad = function (n) { return n < 10 ? "0" + n : n; };
     return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
       + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  // Relative timestamp — falls back to absolute for anything > 30 days.
+  // Locale-free so it matches the rest of the UI (zh-CN dates are scattered
+  // around in Chinese; mixing English "minutes ago" would feel inconsistent).
+  function fmtTimeRel(unix) {
+    var now = Math.floor(Date.now() / 1000);
+    var delta = now - unix;
+    if (delta < 0) return fmtTimeAbs(unix); // clock skew — show absolute
+    if (delta < 60) return "刚刚";
+    if (delta < 3600) return Math.floor(delta / 60) + " 分钟前";
+    if (delta < 86400) return Math.floor(delta / 3600) + " 小时前";
+    if (delta < 30 * 86400) return Math.floor(delta / 86400) + " 天前";
+    return fmtTimeAbs(unix);
   }
 
   function escapeHtml(s) {
@@ -78,6 +94,7 @@
   // --- actions ------------------------------------------------------------
 
   function loadFiles() {
+    $loadError.hidden = true;
     api("GET", "/api/files").then(function (data) {
       var files = data.files || [];
       $tbody.innerHTML = "";
@@ -90,14 +107,23 @@
       $table.hidden = false;
       files.forEach(function (f) {
         var tr = document.createElement("tr");
+        tr.setAttribute("data-name", f.name);
+        tr.setAttribute("tabindex", "0");
+        tr.setAttribute("role", "button");
+        tr.setAttribute("aria-label", "预览 " + f.name);
 
+        // Name (clickable anchor for keyboard / right-click "open in new tab";
+        // row click is the primary action). Title is a dim parenthetical.
         var tdName = document.createElement("td");
-        tdName.innerHTML = "<a href=\"#\" data-name=\"" + escapeHtml(f.name) + "\">"
-          + escapeHtml(f.name) + "</a>";
+        var nameLink = document.createElement("a");
+        nameLink.href = "#";
+        nameLink.setAttribute("data-name", f.name);
+        nameLink.textContent = f.name;
+        tdName.appendChild(nameLink);
         if (f.title) {
           tdName.appendChild(document.createTextNode(" "));
           var sub = document.createElement("span");
-          sub.style.color = "var(--fg-dim)";
+          sub.className = "row-title";
           sub.textContent = "(" + f.title + ")";
           tdName.appendChild(sub);
         }
@@ -106,37 +132,64 @@
         tdSize.textContent = fmtSize(f.size);
 
         var tdTime = document.createElement("td");
-        tdTime.textContent = fmtTime(f.mtime);
+        tdTime.textContent = fmtTimeRel(f.mtime);
+        tdTime.title = fmtTimeAbs(f.mtime);
 
-        var tdUrl = document.createElement("td");
-        // Inherit body's system UI font (rounded on macOS / Windows / Linux)
-        // instead of monospace — the URL is for copy-paste, not code reading.
-        tdUrl.style.wordBreak = "break-all";
-        tdUrl.style.fontSize = "13px";
-        // The URL is itself a clickable link — opens the public page (which
-        // renders annotations read-only) in a new tab. The first column's
-        // <a data-name> is a different element and still opens the in-page
-        // preview, so the two don't collide.
-        var urlLink = document.createElement("a");
-        urlLink.href = f.url;
-        urlLink.target = "_blank";
-        urlLink.rel = "noopener noreferrer";
-        urlLink.textContent = f.url;
-        tdUrl.appendChild(urlLink);
-        tdUrl.appendChild(document.createTextNode(" "));
+        // Annotation count — clicking jumps to anno mode + opens the file.
+        // 0 = no link (greyed). Anything else is a button-style link.
+        var tdAnno = document.createElement("td");
+        if (f.annotation_count > 0) {
+          var annoLink = document.createElement("a");
+          annoLink.href = "#";
+          annoLink.className = "anno-count";
+          annoLink.setAttribute("data-name", f.name);
+          annoLink.textContent = f.annotation_count + " 条";
+          tdAnno.appendChild(annoLink);
+        } else {
+          tdAnno.textContent = "—";
+          tdAnno.className = "row-dim";
+        }
+
+        // Copy-URL action — small button, inline with the row.
+        var tdActions = document.createElement("td");
         var copyBtn = document.createElement("button");
-        copyBtn.textContent = "复制";
-        copyBtn.onclick = function () { copyUrl(f.url); };
-        tdUrl.appendChild(copyBtn);
+        copyBtn.type = "button";
+        copyBtn.className = "row-action";
+        copyBtn.textContent = "复制 URL";
+        copyBtn.title = f.url;
+        copyBtn.setAttribute("aria-label", "复制 " + f.name + " 公开 URL");
+        copyBtn.onclick = function (ev) {
+          ev.stopPropagation();   // don't bubble to row preview
+          copyUrl(f.url);
+        };
+        tdActions.appendChild(copyBtn);
 
         tr.appendChild(tdName);
         tr.appendChild(tdSize);
         tr.appendChild(tdTime);
-        tr.appendChild(tdUrl);
+        tr.appendChild(tdAnno);
+        tr.appendChild(tdActions);
         $tbody.appendChild(tr);
       });
-    }).catch(function () {
-      // Error toast already shown by api().
+      // Restore last-opened file if it's still in the list. This runs
+      // once at page load — preview() captures the new scroll position,
+      // and the iframe `load` handler restores the saved Y. Without this
+      // the user has to click the file again on every reload, which
+      // defeats "I was reading this yesterday" continuity.
+      var last = lsStr(LS_LAST_FILE, "");
+      if (last && files.some(function (f) { return f.name === last; })) {
+        preview(last);
+      }
+    }).catch(function (err) {
+      // api() already toasted; also surface an inline error in the table
+      // area so the user can see "list failed to load" even after the
+      // toast disappears (toast = transient, inline = state).
+      $tbody.innerHTML = "";
+      $table.hidden = true;
+      $empty.hidden = true;
+      $loadError.textContent =
+        "加载文件列表失败：" + (err && err.message ? err.message : "网络错误");
+      $loadError.hidden = false;
     });
   }
 
@@ -144,6 +197,20 @@
     $previewSection.hidden = false;
     $previewName.textContent = "(" + name + ")";
     $previewFrame.src = "/files/" + encodeURIComponent(name);
+    // Remember which file the user opened last so a reload can put them
+    // back. The scroll position is restored separately, after the iframe
+    // loads (see onIframeLoad below) — it depends on the new document
+    // having a measurable scrollHeight.
+    lsSetStr(LS_LAST_FILE, name);
+    lsSetNumber(LS_LAST_SCROLL, 0);   // reset on file switch
+    // Scroll the preview into view. Without this, on a viewport where
+    // the file table fills the fold, clicking a filename reveals the
+    // iframe but the user has to manually scroll down to see it — the
+    // hidden→visible transition is meaningless if it's offscreen.
+    // Defer to next tick so the unhide + iframe src change settle first.
+    setTimeout(function () {
+      $previewSection.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
   }
 
   function copyUrl(url) {
@@ -175,13 +242,33 @@
 
   // --- wire up ------------------------------------------------------------
 
-  // Click on filename → preview.
+  // Click delegation: any row OR any link inside it triggers preview,
+  // unless the click came from a row-action button (copy, etc.) which
+  // stops propagation. Keyboard support: Enter/Space on a focused row
+  // also previews.
+  function rowActivate(target) {
+    var name = target && target.getAttribute
+      && target.getAttribute("data-name");
+    if (name) preview(name);
+  }
+
   $tbody.onclick = function (e) {
-    var a = e.target.closest("a[data-name]");
-    if (a) {
+    var link = e.target.closest("a[data-name]");
+    if (link) {
       e.preventDefault();
-      preview(a.getAttribute("data-name"));
+      rowActivate(link);
+      return;
     }
+    var tr = e.target.closest("tr[data-name]");
+    if (tr) rowActivate(tr);
+  };
+
+  $tbody.onkeydown = function (e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    var tr = e.target.closest("tr[data-name]");
+    if (!tr) return;
+    e.preventDefault();
+    rowActivate(tr);
   };
 
   // Initial load — list is always public; just call.
@@ -197,6 +284,8 @@
   // --- UI-pref persistence (layout only; the token is NEVER persisted) ---
   var LS_ANNO_COLLAPSED = "agent-html-drop:annoCollapsed";
   var LS_TOC_HIDDEN = "agent-html-drop:tocHidden";
+  var LS_LAST_FILE = "agent-html-drop:lastFile";
+  var LS_LAST_SCROLL = "agent-html-drop:lastScroll";
 
   function lsBool(key, dflt) {
     try {
@@ -208,6 +297,29 @@
   }
   function lsSetBool(key, val) {
     try { localStorage.setItem(key, val ? "1" : "0"); } catch (e) {}
+  }
+  function lsStr(key, dflt) {
+    try {
+      var v = localStorage.getItem(key);
+      return v === null ? dflt : v;
+    } catch (e) {
+      return dflt;
+    }
+  }
+  function lsSetStr(key, val) {
+    try { localStorage.setItem(key, String(val)); } catch (e) {}
+  }
+  function lsNumber(key, dflt) {
+    try {
+      var v = localStorage.getItem(key);
+      var n = v === null ? NaN : parseInt(v, 10);
+      return isNaN(n) ? dflt : n;
+    } catch (e) {
+      return dflt;
+    }
+  }
+  function lsSetNumber(key, val) {
+    try { localStorage.setItem(key, String(Math.floor(val))); } catch (e) {}
   }
 
   var annoCollapsed = lsBool(LS_ANNO_COLLAPSED, true);
@@ -493,16 +605,32 @@
   // separate document, so the management page's style.css doesn't reach it,
   // and the md→html theme has no `mark` rule — without this, <mark> falls
   // back to the browser-default glaring yellow, which wouldn't match the
-  // public page. Keep this color IN SYNC with anno-viewer.js's
-  // mark[data-anno-id] rule (see test_mark_color_matches_*).
+  // public page.
+  //
+  // The CSS text comes from /anno-marks.css (cached after first fetch) —
+  // the same file the public-page viewer loads via <link>, so the two
+  // surfaces can't drift on color or hover state. (Earlier the contract
+  // was a "keep in sync" comment between app.js and anno-viewer.js;
+  // now it's the same bytes.)
+  var _markStyleText = null;
   function ensureMarkStyle(doc) {
     if (doc.getElementById("ahd-anno-marks")) return;
     var head = doc.head || doc.documentElement;
     if (!head) return;
+    if (_markStyleText === null) {
+      // Inline fallback (yellow with alpha) so a fetch failure still
+      // highlights something instead of leaving raw yellow. The fetch
+      // will retry on every subsequent iframe load until it succeeds.
+      _markStyleText = "mark[data-anno-id]{background:rgba(255,196,0,.32);border-radius:2px;padding:0 1px;cursor:pointer;}";
+      fetch("/anno-marks.css").then(function (r) {
+        return r.ok ? r.text() : null;
+      }).then(function (txt) {
+        if (txt) _markStyleText = txt;
+      }).catch(function () {});
+    }
     var s = doc.createElement("style");
     s.id = "ahd-anno-marks";
-    s.textContent =
-      "mark[data-anno-id]{background:rgba(255,196,0,.32);border-radius:2px;padding:0 1px;cursor:pointer;}";
+    s.textContent = _markStyleText;
     head.appendChild(s);
   }
 
@@ -650,6 +778,7 @@
   var $popComment = document.getElementById("anno-popover-comment");
   var $popMeta = document.getElementById("anno-popover-meta");
   var popoverCurrent = null;
+  var popoverOrderedMarks = [];   // marks in document order, recomputed on highlight
 
   function entryById(id) {
     for (var i = 0; i < annoEntries.length; i++) {
@@ -672,6 +801,7 @@
     $popMeta.textContent = entry.author + " · "
       + new Date(entry.ts * 1000).toISOString().slice(0, 16).replace("T", " ");
     $annoPopover.hidden = false;
+    updatePopoverCounter();
     var pw = $annoPopover.offsetWidth, ph = $annoPopover.offsetHeight;
     if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
     if (left < 8) left = 8;
@@ -680,6 +810,53 @@
     if (top < 8) top = 8;
     $annoPopover.style.left = left + "px";
     $annoPopover.style.top = top + "px";
+  }
+
+  // Show the popover for a given mark, positioning it next to that
+  // mark's location. Used by the prev/next nav buttons to move through
+  // marks in document order without having to scroll-find them.
+  function showPopoverForMark(mark) {
+    if (!mark) return;
+    var entry = entryById(mark.getAttribute("data-anno-id"));
+    if (!entry) return;
+    var mr = mark.getBoundingClientRect();
+    var fr = $previewFrame.getBoundingClientRect();
+    showPreviewPopover(
+      entry,
+      fr.left + mr.left,
+      fr.top + mr.bottom,
+      fr.top + mr.top,
+      mark,
+    );
+  }
+
+  function updatePopoverCounter() {
+    var $counter = document.getElementById("anno-popover-counter");
+    if (!$counter) return;
+    var total = popoverOrderedMarks.length;
+    var idx = popoverOrderedMarks.indexOf(popoverCurrent);
+    $counter.textContent = total > 0
+      ? (idx + 1) + " / " + total
+      : "—";
+  }
+
+  function navPopover(dir) {
+    if (!popoverOrderedMarks.length) return;
+    var idx = popoverOrderedMarks.indexOf(popoverCurrent);
+    // -1 means popoverCurrent is null or stale; default to first.
+    var next = ((idx < 0 ? -1 : idx) + dir + popoverOrderedMarks.length)
+      % popoverOrderedMarks.length;
+    var target = popoverOrderedMarks[next];
+    if (!target) return;
+    // Scroll the iframe so the target mark is in view, then place the
+    // popover next to it. Without this, next/prev from a distant mark
+    // would jump to its position visually but the popover would still
+    // hover over the old screen location.
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    // scrollIntoView is animated; wait one frame before measuring the
+    // mark's new viewport position. requestAnimationFrame would be nicer
+    // but the iframe's smooth scroll finishes on its own timeline.
+    setTimeout(function () { showPopoverForMark(target); }, 250);
   }
 
   function onIframeMarkClick(ev) {
@@ -695,6 +872,10 @@
 
   function wireIframeMarks(doc) {
     var marks = doc.querySelectorAll("mark[data-anno-id]");
+    // Snapshot the marks in document order so prev/next navigation
+    // matches where they actually appear in the article (not the API
+    // insert order, which is the same here but a stale assumption).
+    popoverOrderedMarks = Array.prototype.slice.call(marks);
     for (var i = 0; i < marks.length; i++) {
       marks[i].addEventListener("click", onIframeMarkClick);
     }
@@ -705,10 +886,49 @@
     $annoPopover.onclick = function (ev) { ev.stopPropagation(); };
     var $popCloseBtn = document.getElementById("anno-popover-close");
     if ($popCloseBtn) $popCloseBtn.onclick = hidePreviewPopover;
+    var $popPrev = document.getElementById("anno-popover-prev");
+    var $popNext = document.getElementById("anno-popover-next");
+    if ($popPrev) $popPrev.onclick = function () { navPopover(-1); };
+    if ($popNext) $popNext.onclick = function () { navPopover(1); };
     document.addEventListener("click", function (ev) {
       if (!$annoPopover.hidden && !$annoPopover.contains(ev.target)) hidePreviewPopover();
     });
-    document.addEventListener("keydown", function (ev) { if (ev.key === "Escape") hidePreviewPopover(); });
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape") hidePreviewPopover();
+      // Alt+Left / Alt+Right → prev/next annotation without leaving
+      // keyboard for users reading long docs.
+      if (ev.altKey && ev.key === "ArrowLeft") { ev.preventDefault(); navPopover(-1); }
+      if (ev.altKey && ev.key === "ArrowRight") { ev.preventDefault(); navPopover(1); }
+      // Page Up/Down, Home/End, Space → forward to the preview iframe.
+      // Without this, keyboard users have to click into the iframe before
+      // any of these keys work — the iframe is its own scroll context.
+      // File-table keyboard nav uses Enter/Space/Tab/Arrow keys on rows
+      // (handled separately via $tbody.onkeydown), which won't conflict:
+      // a focused row's Space goes to rowActivate() first; here we only
+      // route to the iframe when no row is focused.
+      if ($previewFrame && !$previewFrame.hidden && $previewFrame.contentWindow
+          && !ev.target.closest("input,textarea,button,tr[data-name]")
+          && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+        var keys = { "PageDown": 1, "PageUp": -1, "Space": 1 };
+        var dir = keys[ev.key];
+        if (dir) {
+          var w = $previewFrame.contentWindow;
+          var h = w.innerHeight || 600;
+          w.scrollBy({ top: dir * (h * 0.9), behavior: "auto" });
+          ev.preventDefault();
+        } else if (ev.key === "Home") {
+          $previewFrame.contentWindow.scrollTo(0, 0);
+          ev.preventDefault();
+        } else if (ev.key === "End") {
+          var d = $previewFrame.contentDocument;
+          if (d) {
+            var h = d.documentElement.scrollHeight;
+            $previewFrame.contentWindow.scrollTo(0, h);
+            ev.preventDefault();
+          }
+        }
+      }
+    });
     window.addEventListener("scroll", hidePreviewPopover, true);
   }
 
@@ -884,6 +1104,34 @@
     attachSelectionListener();
     applyTocToggle();        // re-apply TOC fold to the freshly loaded DOM
     refreshAnnoList();       // both modes: read-only in read mode, full in anno
+    // Restore scroll position if this file was the one we last opened
+    // (preview() pre-zeroes LS_LAST_SCROLL on switch, so the only time
+    // it's nonzero is when reload re-opens the same file).
+    var last = lsStr(LS_LAST_FILE, "");
+    var targetY = lsNumber(LS_LAST_SCROLL, 0);
+    if (last && m && last === m[1] && targetY > 0) {
+      var w = $previewFrame.contentWindow;
+      var d = $previewFrame.contentDocument;
+      if (w && d) {
+        // Clamp to the new doc's scroll range (file might be shorter
+        // than when we last read it — e.g. regenerated).
+        var max = Math.max(0,
+          (d.documentElement.scrollHeight || 0) - (w.innerHeight || 0));
+        w.scrollTo(0, Math.min(targetY, max));
+      }
+    }
+    // Throttled save: capture scroll position for restore-on-reload,
+    // but only every 500ms so we're not writing to localStorage on
+    // every wheel tick.
+    var scrollSaveT = null;
+    $previewFrame.contentWindow.addEventListener("scroll", function () {
+      if (scrollSaveT) return;
+      scrollSaveT = setTimeout(function () {
+        scrollSaveT = null;
+        var d = $previewFrame.contentDocument;
+        if (d) lsSetNumber(LS_LAST_SCROLL, d.defaultView.scrollY || 0);
+      }, 500);
+    });
   });
 
   // When preview is hidden, clear current file.

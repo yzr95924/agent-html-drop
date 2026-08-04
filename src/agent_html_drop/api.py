@@ -70,18 +70,8 @@ def _require_bearer(req, cfg: Config):
 
 def _storage_error(exc: storage.StorageError):
     """Map a storage exception to an HTTP response."""
-    if isinstance(exc, storage.InvalidName):
-        return (400, _err("invalid_name", str(exc)), JSON)
-    if isinstance(exc, storage.Conflict):
-        return (409, _err("conflict", str(exc)), JSON)
-    if isinstance(exc, storage.TooLarge):
-        return (413, _err("too_large", str(exc)), JSON)
-    if isinstance(exc, storage.NotFound):
-        return (404, _err("not_found", str(exc)), JSON)
-    if isinstance(exc, storage.DocrootUnwritable):
-        return (500, _err("docroot_unwritable", str(exc)), JSON)
-    # Unknown storage error → 500.
-    return (500, _err("storage_error", str(exc)), JSON)
+    status, code = storage.http_status(exc)
+    return (status, _err(code, str(exc)), JSON)
 
 
 def _err(code: str, msg: str) -> bytes:
@@ -186,10 +176,6 @@ def _make_post_annotation(cfg: Config):
     return handler
 
 
-def _author_of(token: str) -> str:
-    return anno_store.author_of_token(token)
-
-
 def _make_patch_annotation(cfg: Config):
     """PATCH /api/files/<name>/annotations/<id> — cookie + CSRF + author."""
     def handler(req, params, body):
@@ -210,7 +196,7 @@ def _make_patch_annotation(cfg: Config):
         existing = anno_store.get(docroot, name, id_)
         if existing is None:
             return (404, _err("not_found", "annotation not found"), JSON)
-        if existing["author"] != _author_of(token):
+        if existing["author"] != anno_store.author_of_token(token):
             return (403, _err("forbidden", "not your annotation"), JSON)
         try:
             payload = json.loads(body.decode("utf-8"))
@@ -417,6 +403,140 @@ def _make_get_file(cfg: Config):
     return handler
 
 
+def _make_put_file(cfg: Config):
+    """PUT /files/<name> — streaming upload side-channel.
+
+    Symmetric to GET /files/<name>. Lets the agent push HTML bytes
+    directly via raw HTTP without stuffing the content into the MCP
+    tool call (which would burn LLM context for large files).
+
+    Auth: Bearer (same token as MCP).
+    Headers:
+      Content-Length        required; rejected as 411 if missing.
+                            Must be <= server.max_body_size; rejected
+                            as 413 before any body bytes are read.
+      Content-SHA256        optional (hex). When present, the streamed
+                            body hash is verified; mismatch → 400 and
+                            the tmpfile is cleaned up.
+    Query:  ?force=true      overwrite an existing file (case-insensitive
+                            name match); without it, a conflict → 409.
+
+    The route is registered with ``streams_body=True`` so the dispatcher
+    does not pre-read the body — we consume ``req.rfile`` directly in
+    64 KiB chunks via ``storage.upload_stream``, hashing + enforcing
+    ``cfg.max_file_size`` mid-stream. The full payload never lives in
+    memory, so a 50 MiB HTML upload doesn't OOM the daemon.
+
+    On success returns 201 + JSON ``{name, url, size, sha256}``. The
+    agent's MCP ``upload_html(name, sha256)`` call afterwards is a thin
+    metadata-only confirmation (no bytes) — the URL comes back in this
+    response so the agent doesn't have to re-derive it.
+    """
+    docroot = Path(cfg.docroot)
+
+    def handler(req, params, body):
+        # 1. Auth (cheap header check before we touch the body).
+        if not check_bearer(req.headers.get("Authorization"), cfg.token):
+            return _unauthorized()
+
+        # 2. Name (URL-decoded by BaseHTTPRequestHandler before regex match).
+        name = params.get("name", "")
+        try:
+            storage.validate_name(name)
+        except storage.InvalidName:
+            return (400, _err("invalid_name",
+                              "name failed validation"), JSON)
+
+        # 3. Content-Length required (we don't parse chunked framing —
+        #    the wire is plain HTTP/1.1 with explicit length, the same
+        #    shape curl --data-binary @file produces).
+        length_str = req.headers.get("Content-Length")
+        if length_str is None:
+            return (411, _err("length_required",
+                              "Content-Length header is required"),
+                    JSON)
+        try:
+            content_length = int(length_str)
+        except ValueError:
+            return (400, _err("invalid_content_length",
+                              "Content-Length must be an integer"), JSON)
+
+        # 4. Early reject if the declared size exceeds the server-wide
+        #    cap (no point even opening a tmpfile).
+        if content_length > srv.Handler.max_body_size:
+            return (413, _err("too_large",
+                              "declared content-length {} > server cap {}".format(
+                                  content_length, srv.Handler.max_body_size
+                              )), JSON)
+
+        # 5. Conflict check up front (without force → 409, no tmpfile
+        #    created on the rejection path). PUT uses case-insensitive
+        #    match (so "design.html" and "Design.HTML" are the same
+        #    logical file) but always writes to the URL-cased name —
+        #    the URL is the source of truth for HTTP PUT, unlike the
+        #    MCP tool's case-preserving first-upload behavior.
+        force = _query_force(req.path)
+
+        existing = storage._existing_case_insensitive(docroot, name)
+        if existing is not None:
+            if not force:
+                return (409, _err("conflict",
+                                  "file exists (case-insensitive match: {!r}); "
+                                  "pass ?force=true to overwrite".format(existing.name)),
+                        JSON)
+            # force=True with case-mismatched existing: delete the
+            # case-variant first so upload_stream writes the URL-cased
+            # name (no "Design.HTML" + "design.html" pair on disk).
+            if existing.name != name:
+                try:
+                    existing.unlink()
+                except OSError:
+                    return (500, _err("storage_error",
+                                      "could not remove case-variant {!r}".format(existing.name)),
+                            JSON)
+
+        # 6. Optional Content-SHA256 verification (header is read once
+        #    before the stream starts).
+        expected_sha = req.headers.get("Content-SHA256")
+
+        # 7. Stream the body to a tmpfile via storage.upload_stream.
+        #    ``content_length`` bounds the read so we don't block on the
+        #    socket waiting for an EOF that won't come until we reply.
+        try:
+            info = storage.upload_stream(
+                docroot,
+                name,
+                req.rfile,
+                max_size=cfg.max_file_size,
+                content_length=content_length,
+                force=force,
+                expected_sha256=expected_sha,
+            )
+        except storage.StorageError as exc:
+            return _storage_error(exc)
+
+        # 8. Compute final hash for the response body (always, regardless
+        #    of whether the client sent Content-SHA256 — the agent's MCP
+        #    upload_html confirmation needs it).
+        actual_sha = storage.sha256_file(docroot / info.name)
+        payload = {
+            "name": info.name,
+            "url": cfg.public_base_url.rstrip("/") + "/files/" + info.name,
+            "size": info.size,
+            "sha256": actual_sha,
+        }
+        return (201, json.dumps(payload).encode("utf-8"), JSON)
+
+    return handler
+
+
+def _query_force(path: str) -> bool:
+    """Extract ``?force=true`` from a path that may include query string."""
+    from urllib.parse import urlparse, parse_qs
+    qs = parse_qs(urlparse(path).query)
+    return qs.get("force", [""])[0].lower() == "true"
+
+
 # --- registration ------------------------------------------------------------
 
 def register_routes(cfg: Config) -> None:
@@ -443,3 +563,8 @@ def register_routes(cfg: Config) -> None:
     # Public HTML serving (container mode §15.3.1; classic mode uses nginx
     # direct-read). Streaming + path-traversal-safe; see _make_get_file.
     srv.register("GET", r"^/files/(?P<name>[^/]+)$", _make_get_file(cfg))
+    # Streaming upload side-channel (Bearer-protected). Symmetric to GET;
+    # see _make_put_file. ``streams_body=True`` so the daemon reads
+    # rfile directly instead of buffering the whole payload.
+    srv.register("PUT", r"^/files/(?P<name>[^/]+)$",
+                 _make_put_file(cfg), streams_body=True)

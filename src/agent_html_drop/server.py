@@ -23,7 +23,12 @@ from urllib.parse import urlparse
 
 # Route signature: handler(req, params) -> (status, body, headers)
 Handler = Callable[["Handler", Dict[str, str]], Tuple[int, bytes, Dict[str, str]]]
-Route = Tuple[str, "re.Pattern[str]", Handler]
+# Route record: (method, regex, handler, streams_body).
+# ``streams_body`` (default False): the dispatcher does NOT pre-read the
+# request body — the handler is responsible for consuming ``req.rfile``
+# itself. Used by routes that need to stream large payloads (PUT /files/
+# for HTML upload) without buffering them whole into memory.
+Route = Tuple[str, "re.Pattern[str]", Handler, bool]
 
 # Module-level route registry. Populated by cli.serve at startup.
 routes: List[Route] = []
@@ -35,14 +40,21 @@ routes: List[Route] = []
 STREAMED = object()
 
 
-def register(method: str, pattern: str, handler: Handler) -> None:
+def register(method: str, pattern: str, handler: Handler,
+             *, streams_body: bool = False) -> None:
     """Register ``handler`` for ``method`` + path regex ``pattern``.
 
     Path patterns use Python regex with named groups for path params,
     e.g. ``r"^/api/files/(?P<name>[^/]+)$"``. Order matters — first match
     wins.
+
+    Set ``streams_body=True`` for handlers that read the request body
+    directly from ``req.rfile`` (typically to avoid buffering huge
+    payloads). The dispatcher will then pass ``body=b""`` instead of
+    calling ``_read_body``; oversized-body enforcement shifts to the
+    handler (e.g. via Content-Length pre-check).
     """
-    routes.append((method.upper(), re.compile(pattern), handler))
+    routes.append((method.upper(), re.compile(pattern), handler, streams_body))
 
 
 class BodyTooLarge(Exception):
@@ -72,6 +84,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         self._dispatch()
 
+    def do_PUT(self) -> None:
+        self._dispatch()
+
     def do_PATCH(self) -> None:
         self._dispatch()
 
@@ -85,17 +100,17 @@ class Handler(BaseHTTPRequestHandler):
 
         # Find a route. We also collect all methods that match the path
         # so 405 can emit a useful Allow header.
-        matched: Optional[Tuple[Handler, Dict[str, str]]] = None
+        matched: Optional[Tuple[Handler, Dict[str, str], bool]] = None
         path_matches_any: bool = False
         path_methods: List[str] = []
-        for m, pat, h in routes:
+        for m, pat, h, streams in routes:
             m_pat = pat.match(path)
             if not m_pat:
                 continue
             path_matches_any = True
             path_methods.append(m)
             if m == method and matched is None:
-                matched = (h, m_pat.groupdict())
+                matched = (h, m_pat.groupdict(), streams)
 
         if matched is None:
             if path_matches_any:
@@ -112,18 +127,26 @@ class Handler(BaseHTTPRequestHandler):
                 )
             return
 
-        handler, params = matched
+        handler, params, streams = matched
 
-        # Read body (with size cap).
-        try:
-            body = self._read_body()
-        except BodyTooLarge as e:
-            self._respond(
-                413,
-                "body too large: {} > {}\n".format(e.length, e.cap).encode("utf-8"),
-                {"Content-Type": "text/plain"},
-            )
-            return
+        # Read body (with size cap) UNLESS the route opts into streaming
+        # the body itself. Streaming routes (e.g. PUT /files/<name> for
+        # large HTML uploads) read directly from self.rfile to avoid
+        # buffering the whole payload into memory; they're responsible
+        # for their own size enforcement (typically via Content-Length
+        # pre-check + mid-stream cap during write).
+        if streams:
+            body = b""
+        else:
+            try:
+                body = self._read_body()
+            except BodyTooLarge as e:
+                self._respond(
+                    413,
+                    "body too large: {} > {}\n".format(e.length, e.cap).encode("utf-8"),
+                    {"Content-Type": "text/plain"},
+                )
+                return
 
         # Dispatch.
         try:

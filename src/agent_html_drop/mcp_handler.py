@@ -37,9 +37,12 @@ TOOL_SCHEMAS = [
     {
         "name": "upload_html",
         "description": (
-            "Upload a self-contained HTML file to the nginx docroot. "
-            "Returns the public URL. Pass force=true to overwrite an "
-            "existing file with the same (case-insensitive) name."
+            "Register an HTML file that's already on the docroot and "
+            "return its public URL. The bytes themselves must arrive via "
+            "PUT /files/<name> (Bearer-authenticated streaming side-"
+            "channel) — this tool is a metadata-only confirmation that "
+            "keeps large HTML out of the LLM context. Verify the file "
+            "exists and the on-disk sha256 matches ``sha256``."
         ),
         "inputSchema": {
             "type": "object",
@@ -50,17 +53,15 @@ TOOL_SCHEMAS = [
                         "Filename; must match [A-Za-z0-9._-]+\\.html, max 200 chars."
                     ),
                 },
-                "content": {
+                "sha256": {
                     "type": "string",
-                    "description": "HTML content (UTF-8 text).",
-                },
-                "force": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Overwrite an existing file with the same name.",
+                    "description": (
+                        "Hex sha256 of the file as it exists on disk "
+                        "(compute locally with sha256sum before calling)."
+                    ),
                 },
             },
-            "required": ["name", "content"],
+            "required": ["name", "sha256"],
         },
     },
     {
@@ -147,53 +148,52 @@ def _tool_result(text: str, is_error: bool = False) -> Dict[str, Any]:
         "isError": is_error,
     }
 
-def _storage_code(exc: storage.StorageError) -> int:
-    """Map a storage exception to an MCP error code."""
-    if isinstance(exc, storage.InvalidName):
-        return -32602
-    if isinstance(exc, storage.Conflict):
-        return -32010
-    if isinstance(exc, storage.TooLarge):
-        return -32011
-    if isinstance(exc, storage.DocrootUnwritable):
-        return -32012
-    if isinstance(exc, storage.NotFound):
-        return -32020
-    return -32603
-
-def _error_class_name(exc: storage.StorageError) -> str:
-    """Convert a storage exception class name to snake_case format."""
-    name = exc.__class__.__name__
-    # Simple conversion: NotFound → not_found, InvalidName → invalid_name, etc.
-    result = ""
-    for i, char in enumerate(name):
-        if i > 0 and char.isupper():
-            result += "_" + char.lower()
-        else:
-            result += char.lower()
-    return result
-
 # --- tool implementations ---------------------------------------------------
 
 def _impl_upload_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
+    """Metadata-only confirmation step for an already-uploaded file.
+
+    The actual byte transfer happens via ``PUT /files/<name>`` (the
+    streaming side-channel added to keep large HTML out of the LLM
+    context). This tool verifies the file landed correctly and returns
+    its public URL so the agent can include it in further context.
+
+    Returns ``isError=True`` with ``error: not_found`` when the file
+    isn't on disk (i.e. PUT wasn't called or failed), or
+    ``error: sha256_mismatch`` when the on-disk hash disagrees with
+    what the caller saw locally — the agent should retry the PUT.
+    """
     name = args.get("name")
-    content = args.get("content")
-    force = bool(args.get("force", False))
+    sha = args.get("sha256")
+    if not isinstance(name, str) or not isinstance(sha, str):
+        raise ValueError("name and sha256 must be strings")
 
-    if not isinstance(name, str) or not isinstance(content, str):
-        raise ValueError("name and content must be strings")
+    storage.validate_name(name)
+    docroot = Path(cfg.docroot)
+    target = docroot / name
+    if not target.is_file():
+        # Case-insensitive lookup (matches PUT semantics — DESIGN.HTML
+        # and design.html are the same logical file).
+        existing = storage._existing_case_insensitive(docroot, name)
+        if existing is None:
+            raise storage.NotFound("file does not exist: {}".format(name))
+        target = existing
+        name = existing.name
 
-    info = storage.upload(
-        Path(cfg.docroot),
-        name,
-        content,
-        max_size=cfg.max_file_size,
-        force=force,
-    )
+    # Stream the file through SHA256 — never load it whole (the whole
+    # point of the side-channel is that we don't buffer large HTML).
+    actual = storage.sha256_file(target, max_size=cfg.max_file_size)
+    if actual.lower() != sha.lower():
+        raise ValueError(
+            "sha256 mismatch: declared={}, actual={}".format(sha, actual)
+        )
+
+    stat = target.stat()
     payload = {
-        "url": cfg.public_base_url.rstrip("/") + "/files/" + info.name,
-        "name": info.name,
-        "size": info.size,
+        "url": cfg.public_base_url.rstrip("/") + "/files/" + name,
+        "name": name,
+        "size": stat.st_size,
+        "sha256": actual,
     }
     return _tool_result(json.dumps(payload))
 
@@ -264,10 +264,9 @@ _TOOL_DISPATCH = {
     "list_html": _impl_list_html,
     "delete_html": _impl_delete_html,
     "get_public_url": _impl_get_public_url,
+    "list_annotations": _impl_list_annotations,
+    "delete_annotation": _impl_delete_annotation,
 }
-
-_TOOL_DISPATCH["list_annotations"] = _impl_list_annotations
-_TOOL_DISPATCH["delete_annotation"] = _impl_delete_annotation
 
 # --- JSON-RPC dispatch ------------------------------------------------------
 
@@ -373,13 +372,15 @@ def handle(req, params, body: bytes, cfg: Config) -> Tuple[int, bytes, Dict[str,
             try:
                 result = impl(arguments, cfg)
             except storage.StorageError as exc:
-                code = _storage_code(exc)
                 # Surface as a tool-level error (isError=True) so the
                 # agent sees a structured failure inside result.content,
                 # not a JSON-RPC error (which Claude Code treats as a
-                # protocol-level failure).
+                # protocol-level failure). Error code comes from
+                # ``storage.http_status`` — the same table /api uses, so
+                # HTTP and MCP surfaces stay aligned.
+                _, err_code = storage.http_status(exc)
                 err_payload = {
-                    "error": _error_class_name(exc),
+                    "error": err_code,
                     "message": str(exc),
                 }
                 return (

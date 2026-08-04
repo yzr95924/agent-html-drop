@@ -50,7 +50,11 @@ def mcp_server(tmp_path):
     )
 
     srv.routes.clear()
+    # Register both /mcp (for tool calls) and /api/* + /files/* (for the
+    # streaming PUT side-channel tested alongside MCP upload_html).
     mcp_handler.register_route(cfg)
+    from agent_html_drop import api as api_mod
+    api_mod.register_routes(cfg)
 
     http = srv.make_server("127.0.0.1", 0, quiet=True)
     t = threading.Thread(target=http.serve_forever, daemon=True)
@@ -149,9 +153,13 @@ def test_tools_list_advertises_input_schemas(mcp_server):
     http, _, _ = mcp_server
     status, payload = _rpc(http, "tools/list")
     by_name = {t["name"]: t for t in payload["result"]["tools"]}
-    assert "name" in by_name["upload_html"]["inputSchema"]["properties"]
-    assert "content" in by_name["upload_html"]["inputSchema"]["properties"]
-    assert "force" in by_name["upload_html"]["inputSchema"]["properties"]
+    schema = by_name["upload_html"]["inputSchema"]
+    # New shape: bytes arrive via PUT /files/<name>, not via this tool.
+    assert "name" in schema["properties"]
+    assert "sha256" in schema["properties"]
+    assert "content" not in schema["properties"]
+    assert "force" not in schema["properties"]
+    assert schema["required"] == ["name", "sha256"]
 
 
 def test_notifications_initialized_is_acked(mcp_server):
@@ -161,68 +169,120 @@ def test_notifications_initialized_is_acked(mcp_server):
     assert payload["result"] is None
 
 
-# --- tools/call: upload_html -------------------------------------------------
+# --- tools/call: upload_html (verify-not-write) ------------------------------
+#
+# upload_html is now a metadata-only confirmation step. The actual
+# bytes arrive via PUT /files/<name> (the streaming side-channel);
+# upload_html only checks the file is on disk and its sha256 matches
+# what the agent saw locally, then returns the public URL.
+
+import hashlib
+
 
 def test_upload_html_success(mcp_server):
-    http, _, docroot = mcp_server
+    """File on disk + matching sha256 → URL returned, no write."""
+    import http.client
+    http, cfg, docroot = mcp_server
+    body = b"<html><body>hi</body></html>"
+    (docroot / "design.html").write_bytes(body)
+    sha = hashlib.sha256(body).hexdigest()
     status, payload = _rpc(http, "tools/call", {
         "name": "upload_html",
-        "arguments": {"name": "design.html", "content": "<html>x</html>"},
+        "arguments": {"name": "design.html", "sha256": sha},
     })
     assert status == 200
     assert payload["result"]["isError"] is False
     inner = json.loads(payload["result"]["content"][0]["text"])
     assert inner["url"] == "https://notes.example.com/files/design.html"
     assert inner["name"] == "design.html"
-    assert inner["size"] > 0
-    assert (docroot / "design.html").exists()
+    assert inner["size"] == len(body)
+    assert inner["sha256"] == sha
+    # File untouched (no overwrite happens here).
+    assert (docroot / "design.html").read_bytes() == body
 
 
-def test_upload_html_conflict_no_force(mcp_server):
-    http, _, docroot = mcp_server
-    (docroot / "design.html").write_text("first")
-    status, payload = _rpc(http, "tools/call", {
+def test_upload_html_after_put_round_trip(mcp_server):
+    """Real flow: PUT bytes, then call upload_html with that sha256."""
+    srv_, cfg, docroot = mcp_server
+    body = b"<html><body>round-trip</body></html>"
+    # PUT first
+    host, port = srv_.server_address
+    conn = http.client.HTTPConnection(host, port, timeout=2)
+    try:
+        conn.request("PUT", "/files/design.html?force=true", body=body, headers={
+            "Content-Length": str(len(body)),
+            "Authorization": "Bearer " + TOKEN,
+        })
+        r = conn.getresponse()
+        assert r.status == 201
+        r.read()
+    finally:
+        conn.close()
+    # Then call upload_html to register it in agent context
+    sha = hashlib.sha256(body).hexdigest()
+    status, payload = _rpc(srv_, "tools/call", {
         "name": "upload_html",
-        "arguments": {"name": "design.html", "content": "second"},
-    })
-    assert status == 200
-    assert payload["result"]["isError"] is True
-    inner = json.loads(payload["result"]["content"][0]["text"])
-    assert inner["error"] == "conflict"
-
-
-def test_upload_html_force_overwrites(mcp_server):
-    http, _, docroot = mcp_server
-    (docroot / "design.html").write_text("first")
-    status, payload = _rpc(http, "tools/call", {
-        "name": "upload_html",
-        "arguments": {"name": "design.html", "content": "second", "force": True},
+        "arguments": {"name": "design.html", "sha256": sha},
     })
     assert payload["result"]["isError"] is False
-    assert (docroot / "design.html").read_text() == "second"
+    inner = json.loads(payload["result"]["content"][0]["text"])
+    assert inner["sha256"] == sha
+    assert inner["url"].endswith("/files/design.html")
+
+
+def test_upload_html_file_missing_returns_not_found(mcp_server):
+    http, _, _ = mcp_server
+    status, payload = _rpc(http, "tools/call", {
+        "name": "upload_html",
+        "arguments": {
+            "name": "nope.html",
+            "sha256": "0" * 64,
+        },
+    })
+    assert payload["result"]["isError"] is True
+    inner = json.loads(payload["result"]["content"][0]["text"])
+    assert inner["error"] == "not_found"
+
+
+def test_upload_html_sha256_mismatch(mcp_server):
+    http, _, docroot = mcp_server
+    (docroot / "x.html").write_bytes(b"<html>actual</html>")
+    status, payload = _rpc(http, "tools/call", {
+        "name": "upload_html",
+        "arguments": {"name": "x.html", "sha256": "0" * 64},
+    })
+    assert payload["result"]["isError"] is True
+    inner = json.loads(payload["result"]["content"][0]["text"])
+    assert inner["error"] == "invalid_args"
+    assert "sha256 mismatch" in inner["message"]
 
 
 def test_upload_html_invalid_name(mcp_server):
     http, _, _ = mcp_server
     status, payload = _rpc(http, "tools/call", {
         "name": "upload_html",
-        "arguments": {"name": "bad name.html", "content": "x"},
+        "arguments": {"name": "bad name.html", "sha256": "0" * 64},
     })
     assert payload["result"]["isError"] is True
     inner = json.loads(payload["result"]["content"][0]["text"])
     assert inner["error"] == "invalid_name"
 
 
-def test_upload_html_too_large(mcp_server):
-    http, _, _ = mcp_server
-    big = "x" * (10 * 1024 * 1024)  # > 1MB cap in fixture
+def test_upload_html_case_insensitive_existing(mcp_server):
+    """design.html URL but Design.HTML on disk → found, URL reflects on-disk case."""
+    http, _, docroot = mcp_server
+    body = b"<html>case</html>"
+    (docroot / "Design.HTML").write_bytes(body)
+    sha = hashlib.sha256(body).hexdigest()
     status, payload = _rpc(http, "tools/call", {
         "name": "upload_html",
-        "arguments": {"name": "design.html", "content": big},
+        "arguments": {"name": "design.html", "sha256": sha},
     })
-    assert payload["result"]["isError"] is True
+    assert payload["result"]["isError"] is False
     inner = json.loads(payload["result"]["content"][0]["text"])
-    assert inner["error"] == "too_large"
+    # Name reflects actual on-disk casing (case-insensitive lookup).
+    assert inner["name"] == "Design.HTML"
+    assert inner["sha256"] == sha
 
 
 def test_upload_html_unknown_tool(mcp_server):
@@ -312,7 +372,7 @@ def test_upload_html_missing_required_arg(mcp_server):
     http, _, _ = mcp_server
     status, payload = _rpc(http, "tools/call", {
         "name": "upload_html",
-        "arguments": {"name": "design.html"},  # no content
+        "arguments": {"name": "design.html"},  # no sha256
     })
     assert payload["result"]["isError"] is True
     inner = json.loads(payload["result"]["content"][0]["text"])

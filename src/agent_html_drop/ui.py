@@ -9,10 +9,11 @@ without auth.)
 
 Routes:
 
-  - ``GET /``         → ``ui/index.html``
-  - ``GET /style.css``→ ``ui/style.css``
-  - ``GET /app.js``   → ``ui/app.js``
+  - ``GET /``               → ``ui/index.html``
+  - ``GET /style.css``      → ``ui/style.css``
+  - ``GET /app.js``         → ``ui/app.js``
   - ``GET /anno-viewer.js`` → ``ui/anno-viewer.js`` (public-page annotation viewer)
+  - ``GET /anno-marks.css`` → ``ui/anno-marks.css`` (shared <mark> highlight)
 """
 import os
 
@@ -27,6 +28,7 @@ _FILES = {
     "/style.css": "style.css",
     "/app.js": "app.js",
     "/anno-viewer.js": "anno-viewer.js",
+    "/anno-marks.css": "anno-marks.css",
 }
 
 _TEXT_HTML = {"Content-Type": "text/html; charset=utf-8"}
@@ -38,6 +40,7 @@ _CONTENT_TYPE_FOR = {
     "style.css": _TEXT_CSS,
     "app.js": _TEXT_JS,
     "anno-viewer.js": _TEXT_JS,
+    "anno-marks.css": _TEXT_CSS,
 }
 
 

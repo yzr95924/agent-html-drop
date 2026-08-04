@@ -10,11 +10,12 @@ Filenames are validated against
 is double-defended: regex blocks ``/`` and ``..``, plus a ``resolve()``-
 based check catches symlinks pointing outside the docroot.
 """
+import hashlib
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, BinaryIO, Dict, List, Optional, Tuple
 
 
 # Filename policy (matches docs/design.md §4).
@@ -43,6 +44,10 @@ class TooLarge(StorageError):
     """Content exceeds max_file_size."""
 
 
+class Sha256Mismatch(StorageError):
+    """Body hash doesn't match the Content-SHA256 header the client sent."""
+
+
 class DocrootUnwritable(StorageError):
     """The docroot does not exist, is not a directory, or is not writable."""
 
@@ -57,6 +62,32 @@ class FileInfo:
     size: int
     mtime: int          # unix seconds
     title: Optional[str]
+
+
+# Storage exception class → (HTTP status, wire error code). Single source
+# of truth for how storage exceptions surface on both /api (HTTP) and
+# /mcp (JSON-RPC tool envelope).  ``api._storage_error`` reads it via
+# the type table; ``mcp_handler`` reads ``http_status()`` to pick the
+# wire code and reuses the same string for the envelope's ``error``
+# field so the two surfaces never drift.
+_STORAGE_HTTP: Dict[type, Tuple[int, str]] = {
+    InvalidName: (400, "invalid_name"),
+    Conflict: (409, "conflict"),
+    TooLarge: (413, "too_large"),
+    Sha256Mismatch: (400, "sha256_mismatch"),
+    NotFound: (404, "not_found"),
+    DocrootUnwritable: (500, "docroot_unwritable"),
+}
+
+
+def http_status(exc: "StorageError") -> Tuple[int, str]:
+    """Return ``(http_status, error_code)`` for a storage exception.
+
+    Falls back to ``(500, "storage_error")`` for unknown subclasses —
+    forward-compatible if new exceptions are added later without being
+    registered here.
+    """
+    return _STORAGE_HTTP.get(type(exc), (500, "storage_error"))
 
 
 def validate_name(name: Any) -> None:
@@ -192,6 +223,126 @@ def upload(
     )
 
 
+def upload_stream(
+    docroot: Path,
+    name: str,
+    source: BinaryIO,
+    *,
+    max_size: int,
+    content_length: Optional[int] = None,
+    force: bool = False,
+    expected_sha256: Optional[str] = None,
+    chunk_size: int = 65536,
+) -> FileInfo:
+    """Atomic streaming write from ``source`` to ``docroot/name``.
+
+    Reads ``source`` in ``chunk_size`` byte chunks, writes each chunk to
+    a sibling ``.tmp``, hashes incrementally, and atomically replaces the
+    target on success. The full payload is never held in memory — this
+    is the path used by the PUT /files/<name> HTTP route so a 50 MiB
+    HTML upload doesn't buffer whole into RAM before hitting disk.
+
+    ``content_length`` (when provided) bounds the read: the function
+    stops once exactly that many bytes have been consumed from
+    ``source``. This matters because, for sockets, EOF (zero-byte
+    ``read``) only fires when the peer closes the connection — if we
+    read past the declared length, the second ``read`` would block
+    until the client times out. Callers that know the body's length
+    (HTTP handlers reading ``Content-Length``) MUST pass it.
+
+    Mirrors :func:`upload`'s semantics where applicable:
+
+      - name validation, conflict (case-insensitive), docroot writability
+      - 0644 mode on the final file
+      - ``.tmp`` cleaned up on every error path (so retries don't pile up)
+
+    Adds:
+
+      - mid-stream ``max_size`` enforcement (raises ``TooLarge`` once the
+        running total exceeds the cap, not after the full upload)
+      - optional ``expected_sha256`` (hex, lower/upper ok) — when
+        provided, the body hash must match; mismatch raises
+        ``Sha256Mismatch`` and deletes the tmpfile. Used by the PUT
+        handler when the client passes ``Content-SHA256`` for end-to-end
+        integrity.
+
+    Returns ``FileInfo`` for the newly written file.
+    """
+    validate_name(name)
+    target = _resolve_within(docroot, name)
+
+    existing = _existing_case_insensitive(docroot, name)
+    if existing is not None and not force:
+        raise Conflict(
+            "file exists (case-insensitive match: {!r}); pass force=True to overwrite".format(existing.name)
+        )
+    write_target = existing if existing is not None else target
+
+    tmp = write_target.with_name(write_target.name + ".tmp")
+    hasher = hashlib.sha256()
+    bytes_written = 0
+    try:
+        with open(tmp, "wb") as out:
+            while True:
+                # Bound the read: respect content_length when known so
+                # we don't sit blocked on the socket waiting for an EOF
+                # that won't come until the peer closes (which on
+                # HTTP/1.1 keep-alive only happens after we reply).
+                want = chunk_size
+                if content_length is not None:
+                    remaining = content_length - bytes_written
+                    if remaining <= 0:
+                        break
+                    if want > remaining:
+                        want = remaining
+                chunk = source.read(want)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > max_size:
+                    raise TooLarge(
+                        "content exceeds max_file_size {}".format(max_size)
+                    )
+                out.write(chunk)
+                hasher.update(chunk)
+        os.chmod(tmp, 0o644)
+        # Final check: if the caller declared a content_length, the
+        # tmpfile must contain exactly that many bytes (catches a
+        # client that short-sent the body).
+        actual = tmp.stat().st_size
+        if content_length is not None and actual != content_length:
+            raise TooLarge(
+                "body short: got {} bytes, declared {}".format(actual, content_length)
+            )
+        if expected_sha256 is not None:
+            actual_hex = hasher.hexdigest()
+            if actual_hex.lower() != expected_sha256.lower():
+                raise Sha256Mismatch(
+                    "sha256 mismatch: expected={}, actual={}".format(
+                        expected_sha256, actual_hex
+                    )
+                )
+        os.replace(tmp, write_target)
+    except BaseException:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+    st = write_target.stat()
+    # Title parse is best-effort on the streamed bytes; only meaningful
+    # if the caller hands us a seekable TextIO. We don't try to decode
+    # raw binary here — list_html does that lazily.
+    return FileInfo(
+        name=write_target.name,
+        size=st.st_size,
+        mtime=int(st.st_mtime),
+        title=None,
+    )
+
+
 def list_files(docroot: Path) -> List[FileInfo]:
     """List all ``*.html`` files directly under ``docroot``.
 
@@ -240,6 +391,34 @@ def delete(docroot: Path, name: str) -> bool:
         return False
     target.unlink()
     return True
+
+
+# 64 KiB chunk — same default as ``upload_stream`` so callers don't pick
+# conflicting sizes between hash and write paths.
+_SHA256_CHUNK = 65536
+
+
+def sha256_file(path: Path, *, max_size: Optional[int] = None) -> str:
+    """Stream ``path`` through SHA256 in fixed chunks.
+
+    ``max_size`` (optional) aborts with ``TooLarge`` once bytes-read
+    exceeds it — guards against a corrupt oversized file pinning the
+    worker during MCP verification.
+    """
+    h = hashlib.sha256()
+    bytes_read = 0
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(_SHA256_CHUNK)
+            if not chunk:
+                break
+            h.update(chunk)
+            bytes_read += len(chunk)
+            if max_size is not None and bytes_read > max_size:
+                raise TooLarge(
+                    "file exceeds max_size {}".format(max_size)
+                )
+    return h.hexdigest()
 
 
 def _parse_title(content: str) -> Optional[str]:

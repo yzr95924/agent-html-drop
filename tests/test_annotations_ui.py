@@ -159,14 +159,31 @@ def test_anno_viewer_derives_filename_from_pathname():
 def test_mark_color_matches_between_preview_and_public_viewer():
     """The preview iframe (app.js) and the public page (anno-viewer.js) must
     highlight annotation <mark>s the SAME color — otherwise the two views of
-    the same annotation look inconsistent. Both inject the identical rule
-    (the iframe can't inherit the management page CSS, and the md→html theme
-    has no `mark` rule, so each view must inject it itself)."""
-    color = "rgba(255,196,0,.32)"
+    the same annotation look inconsistent.
+
+    The shared style lives in /anno-marks.css as the single source of
+    truth. The parent (app.js) fetches it and injects the text into the
+    iframe <style>; the public viewer (anno-viewer.js) loads it as a
+    stylesheet. Either way, both surfaces must end up with the canonical
+    ``mark[data-anno-id]`` selector — drift here means the color can
+    desync silently.
+    """
+    marks = (UI_DIR / "anno-marks.css").read_text(encoding="utf-8")
     app = (UI_DIR / "app.js").read_text(encoding="utf-8")
     viewer = (UI_DIR / "anno-viewer.js").read_text(encoding="utf-8")
-    assert color in app, "app.js no longer injects the shared mark color"
-    assert color in viewer, "anno-viewer.js no longer injects the shared mark color"
+    # Canonical selector lives in anno-marks.css.
+    assert "mark[data-anno-id]" in marks, (
+        "anno-marks.css 缺 mark[data-anno-id] 规则——这是 viewer 和管理页 "
+        "iframe 共享的高亮样式源头。"
+    )
+    # Both surfaces must reference it (not hardcode their own copies).
+    assert "/anno-marks.css" in app, (
+        "app.js 不再加载 anno-marks.css——iframe 高亮会回退到 fetch 失败 "
+        "fallback，跟 public 页脱钩。"
+    )
+    assert "/anno-marks.css" in viewer, (
+        "anno-viewer.js 不再加载 anno-marks.css——public 页高亮会丢失。"
+    )
 
 
 # --- popover-first: panel folded by default, click a highlight to read -----

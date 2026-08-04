@@ -36,10 +36,24 @@
   // (A returning visitor who explicitly opened it still gets their choice.)
   var collapsed = lsBool(LS_COLLAPSED, true);
 
-  // --- styles (namespaced ahda-*; self-contained, no theme coupling) -----
+  // --- styles ------------------------------------------------------------
+  // Mark highlight base style comes from /anno-marks.css (shared with the
+  // management page's iframe injection, so the two surfaces can't drift).
+  // The rest of the viewer UI is namespaced ahda-* and self-contained —
+  // public pages have their own (light) theme and we shouldn't drag the
+  // management page's dark variables in here.
+  function loadMarkStyle() {
+    var link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "/anno-marks.css";
+    (document.head || document.documentElement).appendChild(link);
+  }
+  loadMarkStyle();
+
   var style = document.createElement("style");
   style.textContent = [
-    "mark[data-anno-id]{background:rgba(255,196,0,.32);border-radius:2px;padding:0 1px;cursor:pointer;}",
+    // Active mark highlight when the panel/popover is showing its entry —
+    // viewer-only state (app.js doesn't have a persistent "active" state).
     "mark[data-anno-id].ahda-active{background:rgba(255,196,0,.6);outline:1px solid rgba(255,196,0,.9);}",
     "#ahda-panel{position:fixed;top:16px;right:16px;width:min(320px,calc(100vw - 24px));max-height:70vh;overflow:auto;z-index:99999;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px;line-height:1.4;background:rgba(28,30,34,.97);color:#e8e8ea;border:1px solid rgba(255,255,255,.14);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.4);}",
     "#ahda-panel.ahda-collapsed{display:none;}",

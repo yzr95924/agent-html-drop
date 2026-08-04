@@ -9,7 +9,7 @@
 <body>
   <header>
     <h1>agent-html-drop 管理</h1>
-    <div id="readonly-note" style="font-size:12px;color:var(--fg-dim)">
+    <div id="readonly-note" class="hint">
       只读浏览 · 删除 / 上传请走 agent MCP（参见 README）
     </div>
     <button id="anno-toggle" type="button" aria-label="进入批注模式">批注(需 token)</button>
@@ -48,13 +48,14 @@
     <section id="files-section">
       <h2>文件</h2>
       <div id="empty-state" hidden>暂无文件 —— 调 MCP <code>upload_html</code> 上传第一篇。</div>
+      <div id="load-error" hidden></div>
       <table id="file-table">
         <thead>
           <tr>
             <th>名称</th>
             <th>大小</th>
             <th>时间</th>
-            <th>公开 URL</th>
+            <th>批注</th>
           </tr>
         </thead>
         <tbody id="file-tbody"></tbody>
@@ -94,6 +95,11 @@
     <div id="anno-popover-quote" class="ap-quote"></div>
     <div id="anno-popover-comment" class="ap-comment"></div>
     <div id="anno-popover-meta" class="ap-meta"></div>
+    <div class="ap-nav">
+      <button id="anno-popover-prev" type="button" aria-label="上一个批注">‹</button>
+      <span id="anno-popover-counter" class="ap-counter">1 / 1</span>
+      <button id="anno-popover-next" type="button" aria-label="下一个批注">›</button>
+    </div>
   </div>
 
   <script src="/app.js"></script>

@@ -56,6 +56,28 @@ def _get(srv_, path):
         conn.close()
 
 
+def _put(srv_, path, body, *, auth=TOKEN, content_length=None,
+         content_sha256=None, content_type="text/html"):
+    host, port = srv_.server_address
+    conn = http.client.HTTPConnection(host, port, timeout=5)
+    try:
+        if content_length is None:
+            content_length = len(body)
+        hdrs = {"Content-Length": str(content_length)}
+        if content_type is not None:
+            hdrs["Content-Type"] = content_type
+        if auth is not None:
+            hdrs["Authorization"] = "Bearer " + auth
+        if content_sha256 is not None:
+            hdrs["Content-SHA256"] = content_sha256
+        conn.request("PUT", path, body=body, headers=hdrs)
+        r = conn.getresponse()
+        data = r.read()
+        return r.status, dict(r.getheaders()), data
+    finally:
+        conn.close()
+
+
 # --- serving existing files ------------------------------------------------
 
 def test_files_serves_existing_html(http_with_files):
@@ -191,3 +213,189 @@ def test_files_viewer_injected_without_body_tag(http_with_files):
     text = data.decode("utf-8")
     assert '<script src="/anno-viewer.js"' in text
     assert text.count('<script src="/anno-viewer.js"') == 1
+
+
+# --- PUT /files/<name> — streaming upload side-channel ---------------------
+#
+# Lets the agent push HTML bytes via raw HTTP without stuffing the content
+# into the MCP tool call (which would burn LLM context). Symmetric to
+# GET /files/<name>. Same Bearer as MCP. Streams request body straight to
+# tmpfile, atomic-replaces on success, hashes per chunk for sha256.
+# See design §7.3 (write path is Bearer-protected) + optimization for
+# large-HTML agent uploads.
+
+import hashlib
+import json
+
+
+def test_put_writes_file_and_returns_metadata(http_with_files):
+    http, _, docroot = http_with_files
+    body = b"<html><body>hello</body></html>"
+    status, headers, data = _put(http, "/files/design.html", body)
+    assert status == 201
+    payload = json.loads(data)
+    assert payload["name"] == "design.html"
+    assert payload["url"] == "https://notes.example.com/files/design.html"
+    assert payload["size"] == len(body)
+    assert payload["sha256"] == hashlib.sha256(body).hexdigest()
+    assert (docroot / "design.html").read_bytes() == body
+
+
+def test_put_then_get_round_trips(http_with_files):
+    """A file just PUT must be readable by GET /files/<name>."""
+    http, _, _ = http_with_files
+    body = b"<html><body>round-trip</body></html>"
+    status, _, _ = _put(http, "/files/x.html", body)
+    assert status == 201
+    g_status, _, g_data = _get(http, "/files/x.html")
+    assert g_status == 200
+    assert g_data == body
+
+
+def test_put_missing_bearer_returns_401(http_with_files):
+    http, _, _ = http_with_files
+    status, _, _ = _put(http, "/files/a.html", b"<html>x</html>", auth=None)
+    assert status == 401
+
+
+def test_put_wrong_bearer_returns_401(http_with_files):
+    http, _, _ = http_with_files
+    status, _, _ = _put(http, "/files/a.html", b"<html>x</html>", auth="wrong")
+    assert status == 401
+
+
+def test_put_invalid_name_returns_400(http_with_files):
+    http, _, _ = http_with_files
+    status, _, data = _put(http, "/files/bad%20name.html", b"x")
+    assert status == 400
+    assert b"invalid_name" in data
+
+
+def test_put_traversal_returns_400(http_with_files):
+    http, _, docroot = http_with_files
+    status, _, data = _put(http, "/files/..%2Fetc%2Fpasswd.html", b"x")
+    assert status == 400
+
+
+def test_put_missing_content_length_returns_411(http_with_files):
+    srv_, _, _ = http_with_files
+    host, port = srv_.server_address
+    conn = http.client.HTTPConnection(host, port, timeout=2)
+    try:
+        conn.putrequest("PUT", "/files/x.html", skip_host=False)
+        conn.putheader("Authorization", "Bearer " + TOKEN)
+        conn.putheader("Content-Type", "text/html")
+        # Deliberately omit Content-Length.
+        conn.endheaders()
+        conn.send(b"<html>x</html>")
+        r = conn.getresponse()
+        data = r.read()
+        assert r.status == 411
+    finally:
+        conn.close()
+
+
+def test_put_content_length_exceeds_max_body_returns_413(http_with_files):
+    """Content-Length > server.max_body_size is rejected BEFORE reading body."""
+    http, _, _ = http_with_files
+    # server.max_body_size defaults to 50 MiB; fake a 60 MiB claim with a
+    # tiny body — the server should still 413 on the header.
+    fake_len = 60 * 1024 * 1024
+    status, _, _ = _put(http, "/files/x.html", b"x", content_length=fake_len)
+    assert status == 413
+
+
+def test_put_body_actually_exceeds_max_file_size_returns_413(http_with_files):
+    """Body really larger than cfg.max_file_size (1 MiB in fixture) → 413.
+
+    The header lies or the size cap kicks in mid-stream. Either way, the
+    file must NOT be written and any tmp must be cleaned up.
+    """
+    http, _, docroot = http_with_files
+    body = b"x" * (2 * 1024 * 1024)  # 2 MiB > 1 MiB cap
+    status, _, _ = _put(http, "/files/big.html", body)
+    assert status == 413
+    assert not (docroot / "big.html").exists()
+    # No orphan .tmp left behind.
+    leftovers = [p for p in docroot.iterdir() if p.name.endswith(".tmp")]
+    assert leftovers == []
+
+
+def test_put_conflict_without_force_returns_409(http_with_files):
+    http, _, docroot = http_with_files
+    (docroot / "design.html").write_bytes(b"first")
+    status, _, data = _put(http, "/files/design.html", b"second")
+    assert status == 409
+    assert b"conflict" in data
+    assert (docroot / "design.html").read_bytes() == b"first"
+
+
+def test_put_force_query_overwrites(http_with_files):
+    http, _, docroot = http_with_files
+    (docroot / "design.html").write_bytes(b"first")
+    status, _, _ = _put(
+        http, "/files/design.html?force=true", b"second"
+    )
+    assert status == 201
+    assert (docroot / "design.html").read_bytes() == b"second"
+
+
+def test_put_sha256_mismatch_returns_400(http_with_files):
+    """Content-SHA256 header that doesn't match the body → 400, no file written."""
+    http, _, docroot = http_with_files
+    body = b"<html>actual</html>"
+    wrong = "0" * 64
+    status, _, data = _put(
+        http, "/files/x.html", body, content_sha256=wrong
+    )
+    assert status == 400
+    assert b"sha256" in data
+    assert not (docroot / "x.html").exists()
+    leftovers = [p for p in docroot.iterdir() if p.name.endswith(".tmp")]
+    assert leftovers == []
+
+
+def test_put_sha256_match_succeeds(http_with_files):
+    http, _, docroot = http_with_files
+    body = b"<html>ok</html>"
+    good = hashlib.sha256(body).hexdigest()
+    status, _, payload_bytes = _put(
+        http, "/files/x.html", body, content_sha256=good
+    )
+    assert status == 201
+    payload = json.loads(payload_bytes)
+    assert payload["sha256"] == good
+    assert (docroot / "x.html").read_bytes() == body
+
+
+def test_put_large_file_round_trips(http_with_files):
+    """700 KiB body — exercises the streaming path (multi-chunk) without
+    tripping the fixture's 1 MiB max_file_size cap."""
+    http, _, docroot = http_with_files
+    body = b"<html>" + b"y" * (700 * 1024) + b"</html>"
+    status, _, _ = _put(http, "/files/big.html", body)
+    assert status == 201
+    assert (docroot / "big.html").stat().st_size == len(body)
+    # Read back via GET to confirm content matches exactly.
+    g_status, _, g_data = _get(http, "/files/big.html")
+    assert g_status == 200
+    assert g_data == body
+
+
+def test_put_uses_case_insensitive_existing_target(http_with_files):
+    """DESIGN.HTML on disk + design.html in PUT URL → overwrite existing."""
+    http, _, docroot = http_with_files
+    (docroot / "Design.HTML").write_bytes(b"old")
+    status, _, _ = _put(
+        http, "/files/design.html", b"new", content_length=len(b"new")
+    )
+    assert status == 409  # existing case-variant detected, no force
+    # With force, the existing one is overwritten (no duplicate created).
+    status, _, _ = _put(
+        http, "/files/design.html?force=true", b"new",
+        content_length=len(b"new"),
+    )
+    assert status == 201
+    # DESIGN.HTML is gone (case-preserving overwrite), no design.html added.
+    assert not (docroot / "Design.HTML").exists()
+    assert (docroot / "design.html").read_bytes() == b"new"

@@ -92,12 +92,27 @@ tbody td button {
 
 tbody td button:hover { background: var(--bg); }
 
-iframe {
+/* Reading surface: the iframe IS the document. yzr-md-to-html ships
+   a GitHub-dark palette (#0d1117 body), so the container should sit on
+   a *very slightly* lifted dark surface — same family as the chrome
+   (#0f1115) but a step brighter, so the iframe reads as a "sheet" rather
+   than another window punched into the chrome. Without this lift the
+   iframe border disappears and the article feels disconnected.
+   - max-width 980 keeps the chrome from sprawling on wide viewports
+     (the article itself is centered at 880 by yzr-md-to-html)
+   - 78vh gives a long article some breathing room over the old 70vh */
+#preview-frame {
+  display: block;
   width: 100%;
-  height: 70vh;
-  background: white;
+  max-width: 980px;
+  height: 78vh;
+  margin: 0 auto;
+  background: #1a1d24;        /* matches --bg-elev */
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 #toast {
@@ -118,6 +133,78 @@ code {
   background: var(--bg);
   padding: 1px 5px;
   border-radius: 3px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+/* Both modal dialogs (anno token + anno add) share a backdrop tone;
+   collapse the two identical rules into one selector. */
+dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+
+/* --- file table ----------------------------------------------------------
+   Row-level affordances: hover + cursor signal that the whole row is
+   clickable; the tr has tabindex=0 so keyboard users get the same hint
+   via focus ring (outline: revert picks the browser default focus
+   outline, which respects OS high-contrast mode). */
+#file-table tbody tr {
+  cursor: pointer;
+}
+#file-table tbody tr:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The parenthetical <title> next to a filename — dim, smaller, so the
+   filename stays the visual anchor. */
+.row-title {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+/* The "—" rendered for files with no annotations. */
+.row-dim {
+  color: var(--fg-dim);
+}
+
+/* The annotation-count link — accent-colored so it reads as actionable
+   without competing with the filename link (which is also accent). */
+.anno-count {
+  color: var(--accent);
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+.anno-count:hover {
+  text-decoration: underline;
+}
+
+/* Per-row action buttons (currently just "复制 URL"). Sits in its own
+   column so it doesn't fight with row-click. */
+.row-action {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.row-action:hover {
+  background: var(--bg-elev);
+  border-color: var(--accent);
+}
+
+/* Inline load-error card — visible in the table area when GET /api/files
+   fails. Toast is for transient operations; this is for state. */
+#load-error {
+  padding: 16px 20px;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  background: rgba(255, 118, 118, 0.08);
+  color: var(--fg);
+  font-size: 13px;
 }
 
 /* --- annotation mode --- */
@@ -144,8 +231,6 @@ code {
   background: var(--bg);
   color: var(--fg);
 }
-
-#anno-token-dialog::backdrop { background: rgba(0,0,0,0.4); }
 
 #anno-token-input {
   display: block;
@@ -333,8 +418,6 @@ code {
   color: var(--fg);
 }
 
-#anno-add-dialog::backdrop { background: rgba(0,0,0,0.4); }
-
 #anno-add-quote {
   margin: 8px 0;
   padding: 6px 10px;
@@ -475,6 +558,34 @@ code {
   margin-top: 6px;
   color: var(--fg-dim);
   font-size: 11px;
+}
+#anno-popover .ap-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+#anno-popover .ap-nav button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+#anno-popover .ap-nav button:hover {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+#anno-popover .ap-counter {
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 #anno-popover-close {
   position: absolute;
