@@ -331,3 +331,32 @@ def test_reading_progress_persists_via_ls_str(ui_server):
     assert "agent-html-drop:lastScroll" in text
     # preview() must restore lastFile on loadFiles completion.
     assert "preview(last)" in text
+
+
+# --- version chip --------------------------------------------------------
+
+def test_index_has_version_chip_placeholder(ui_server):
+    """The header shows a small version chip (e.g. "v0.2.3") populated
+    at runtime from /api/health, so the user always sees the actual
+    running daemon version — not whatever the static HTML was last
+    served from. Placeholder text is set in markup; app.js fills it."""
+    _, _, body = _get(ui_server, "/")
+    text = body.decode("utf-8")
+    assert 'id="version-tag"' in text
+    # Must be inside the header so it's visible at the top of the page.
+    assert text.find('id="version-tag"') < text.find("</header>"), (
+        "version-tag 应该在 header 里,而不是散落在页面其他地方。"
+    )
+
+
+def test_app_js_populates_version_from_health(ui_server):
+    """app.js must fetch /api/health on startup and put the version
+    string into #version-tag. Silent on failure (the chip just stays
+    as the placeholder)."""
+    _, _, body = _get(ui_server, "/app.js")
+    text = body.decode("utf-8")
+    assert "/api/health" in text
+    assert 'getElementById("version-tag")' in text \
+        or "getElementById('version-tag')" in text
+    # Version format: "v" + the JSON's `version` field.
+    assert 'j.version' in text

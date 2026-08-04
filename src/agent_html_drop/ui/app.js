@@ -271,6 +271,22 @@
     rowActivate(tr);
   };
 
+  // --- version chip -----------------------------------------------------
+  // The header shows "agent-html-drop 管理 v0.2.3" so the user can see
+  // which daemon build they're talking to. The version comes from
+  // /api/health (no auth) — that way it always reflects the actual
+  // running daemon, not whatever the static HTML was last served from.
+  // Silent on failure: missing version is just an empty chip, not a
+  // noisy error (the file list failing is the much louder signal).
+  (function loadVersionTag() {
+    var $tag = document.getElementById("version-tag");
+    if (!$tag) return;
+    fetch("/api/health").then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.version) $tag.textContent = "v" + j.version;
+      }).catch(function () { /* keep placeholder */ });
+  })();
+
   // Initial load — list is always public; just call.
   loadFiles();
 
