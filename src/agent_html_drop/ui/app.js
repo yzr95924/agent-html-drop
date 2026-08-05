@@ -354,7 +354,6 @@
   var $annoList = document.getElementById("anno-list");
   var $annoEmpty = document.getElementById("anno-empty");
   var $annoSidebarRefresh = document.getElementById("anno-sidebar-refresh");
-  var $annoSidebarTitle = document.getElementById("anno-sidebar-title");
   var $annoCollapse = document.getElementById("anno-collapse");
   var $annoOpener = document.getElementById("anno-opener");
   var $tocToggle = document.getElementById("toc-toggle");
@@ -537,7 +536,6 @@
 
   function renderAnnoList() {
     $annoList.innerHTML = "";
-    $annoSidebarTitle.textContent = "批注 · " + annoCurrentFile;
     applyAnnoSidebarVisibility();
     if (!annoEntries.length) {
       $annoEmpty.hidden = false;
