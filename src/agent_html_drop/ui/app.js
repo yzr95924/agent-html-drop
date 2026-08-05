@@ -163,22 +163,21 @@
           copyUrl(f.url);
         };
         tdActions.appendChild(copyBtn);
-        // Delete action — anno mode only. Read mode stays read-only;
-        // deletion needs the anno session cookie that authorizes the HTML
-        // delete route (api._make_delete_file). Sits in the actions cell
-        // next to 复制 URL so row-click (preview) is undisturbed.
-        if (mode === "anno") {
-          var delBtn = document.createElement("button");
-          delBtn.type = "button";
-          delBtn.className = "row-action danger";
-          delBtn.textContent = "删除";
-          delBtn.setAttribute("aria-label", "删除 " + f.name);
-          delBtn.onclick = function (ev) {
-            ev.stopPropagation();   // don't bubble to row preview
-            deleteFile(f.name);
-          };
-          tdActions.appendChild(delBtn);
-        }
+        // Delete action — always rendered, shown only in anno mode via the
+        // body.anno-mode class (see style.css .row-delete). Render-time
+        // gating would never show it: loadFiles runs once on page load
+        // when mode is still 'read', and setMode doesn't re-render the
+        // table. Deletion needs the anno session cookie (api._make_delete_file).
+        var delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "row-action danger row-delete";
+        delBtn.textContent = "删除";
+        delBtn.setAttribute("aria-label", "删除 " + f.name);
+        delBtn.onclick = function (ev) {
+          ev.stopPropagation();   // don't bubble to row preview
+          deleteFile(f.name);
+        };
+        tdActions.appendChild(delBtn);
 
         tr.appendChild(tdName);
         tr.appendChild(tdSize);
@@ -432,6 +431,10 @@
 
   function setMode(newMode) {
     mode = newMode;
+    // Mirror mode on <body> so CSS can show/hide anno-only affordances
+    // (e.g. the per-row delete button, .row-delete) without re-rendering
+    // the file table — loadFiles runs once on load; setMode doesn't redo it.
+    document.body.classList.toggle("anno-mode", mode === "anno");
     hidePreviewPopover();
     if (mode === "anno") {
       $annoToggle.hidden = true;

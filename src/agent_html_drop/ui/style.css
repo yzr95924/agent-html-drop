@@ -224,6 +224,11 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
   background: rgba(255, 118, 118, 0.12);
   border-color: var(--danger);
 }
+/* The per-row delete button is always in the DOM but shown only in anno
+   mode via body.anno-mode (toggled in setMode). Hidden by default so the
+   page's default read mode stays read-only. */
+.row-delete { display: none; }
+body.anno-mode .row-delete { display: inline-block; }
 
 /* Inline load-error card — visible in the table area when GET /api/files
    fails. Toast is for transient operations; this is for state. */
@@ -383,7 +388,10 @@ body.anno-sidebar-open #toast {
 
 #anno-sidebar header {
   display: flex;
-  justify-content: space-between;
+  /* No title — just the refresh + collapse actions, pushed to the right
+     edge of the panel (the title "批注" was dropped: the panel is
+     self-evidently the annotation list, the label was dead weight). */
+  justify-content: flex-end;
   align-items: center;
   margin-bottom: 8px;
 }

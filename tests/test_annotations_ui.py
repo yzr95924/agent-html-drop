@@ -265,3 +265,18 @@ def test_app_js_deletes_html_in_anno_mode():
     assert "deleteFile" in app
     assert "window.confirm" in app
     assert 'method: "DELETE"' in app
+
+
+def test_app_js_delete_button_visibility_follows_anno_mode():
+    """The per-row delete button is always rendered and shown/hidden via a
+    body.anno-mode class (toggled in setMode), NOT gated at render time by
+    mode. loadFiles runs once on page load when mode is still 'read', and
+    setMode doesn't re-render the table — so render-time gating would make
+    the button never appear. (Regression: the first cut wrapped the button
+    in `if (mode === "anno")` inside loadFiles, so it never showed.)"""
+    app = (UI_DIR / "app.js").read_text(encoding="utf-8")
+    css = (UI_DIR / "style.css").read_text(encoding="utf-8")
+    assert "row-delete" in app
+    assert '"anno-mode"' in app
+    assert "row-delete" in css
+    assert "anno-mode" in css
