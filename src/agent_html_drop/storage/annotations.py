@@ -182,3 +182,29 @@ def delete(docroot: Path, name: str, id: str, token: str) -> bool:  # noqa: A002
         doc["annotations"] = new_entries
         save(docroot, name, doc)
     return removed
+
+
+def delete_all_for(docroot: Path, name: str) -> bool:
+    """Delete the entire ``<name>.meta`` sidecar. Returns True if it existed.
+
+    Used when an HTML file is deleted (``DELETE /api/files/<name>`` and MCP
+    ``delete_html``) so its annotations don't outlive the document as
+    orphans. Idempotent: a missing ``.meta`` returns False, not an error —
+    mirroring ``storage.delete``'s "missing is not an error" contract, so
+    callers can map the result to 404-or-ignore uniformly.
+
+    Only the ``.meta`` sidecar is touched. Deleting the HTML itself is
+    ``storage.delete``'s job; keeping the two separate preserves the
+    one-way dependency (``_legacy_storage`` does not import annotations).
+    Like ``load``/``save``, the name is trusted to already be validated by
+    the caller — the ``.meta`` filename is ``name + ".meta"`` and name has
+    passed the upload-name regex upstream.
+    """
+    p = docroot / (name + ".meta")
+    if not p.exists():
+        return False
+    try:
+        p.unlink()
+    except OSError:
+        return False
+    return True

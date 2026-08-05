@@ -219,10 +219,14 @@ def _impl_delete_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
     name = args.get("name")
     if not isinstance(name, str):
         raise ValueError("name must be a string")
-    deleted = storage.delete(Path(cfg.docroot), name)
+    docroot = Path(cfg.docroot)
+    deleted = storage.delete(docroot, name)
     if not deleted:
         # Match the API's behavior: 404 / -32020.
         raise storage.NotFound("file does not exist: {}".format(name))
+    # Cascade: drop the .meta sidecar so annotations don't outlive the
+    # document as orphans (mirrors DELETE /api/files/<name>).
+    anno_store.delete_all_for(docroot, name)
     return _tool_result(json.dumps({"deleted": True}))
 
 def _impl_get_public_url(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from agent_html_drop.storage.annotations import (
-    add, delete, list_for, count, get, load,
+    add, delete, delete_all_for, list_for, count, get, load,
 )
 
 
@@ -84,6 +84,35 @@ def test_delete_missing_id_returns_false(docroot):
 
 def test_delete_when_no_meta_returns_false(docroot):
     assert delete(docroot, "missing.html", "any", "t") is False
+
+
+# --- delete_all_for: drop a file's whole .meta (used when deleting HTML) ---
+
+def test_delete_all_for_removes_meta(docroot):
+    add(docroot, "design.html", "q", "c", "t")
+    add(docroot, "design.html", "q2", "c2", "t")
+    assert (docroot / "design.html.meta").exists()
+    assert delete_all_for(docroot, "design.html") is True
+    assert not (docroot / "design.html.meta").exists()
+    # All annotations gone, not just one.
+    assert count(docroot, "design.html") == 0
+
+
+def test_delete_all_for_missing_returns_false(docroot):
+    # No meta file → False, idempotent (mirrors storage.delete's "missing is
+    # not an error" contract so callers can 404-or-ignore uniformly).
+    assert delete_all_for(docroot, "never.html") is False
+
+
+def test_delete_all_for_leaves_html_untouched(docroot):
+    # Only the .meta sidecar is removed. Deleting the HTML itself is
+    # storage.delete's job — keeping them separate preserves the one-way
+    # dependency (storage does not import annotations).
+    (docroot / "design.html").write_text("<h1>x</h1>")
+    add(docroot, "design.html", "q", "c", "t")
+    assert delete_all_for(docroot, "design.html") is True
+    assert (docroot / "design.html").exists()
+    assert not (docroot / "design.html.meta").exists()
 
 
 def test_get_returns_entry(docroot):

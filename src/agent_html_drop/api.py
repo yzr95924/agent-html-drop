@@ -303,9 +303,24 @@ def _make_auth_status(cfg: Config):
 
 def _make_delete_file(cfg: Config):
     def handler(req, params, body):
-        err = _require_bearer(req, cfg)
-        if err:
-            return err
+        # Two auth paths share this handler:
+        #  - agent:  Bearer token (the original path, unchanged).
+        #  - browser: anno session cookie + CSRF — lets the management page
+        #    delete a document while in annotation mode. The page is
+        #    otherwise read-only; deletion is the one HTML write exposed to
+        #    the browser, gated by the same session cookie (and same CSRF
+        #    rule) as annotation writes. Try Bearer first; on failure fall
+        #    back to the cookie.
+        bearer_err = _require_bearer(req, cfg)
+        if bearer_err is not None:
+            if not _anno_session_token(req):
+                return bearer_err  # 401 — neither Bearer nor valid cookie
+            if not csrf_check(
+                req.headers.get("Host", ""),
+                req.headers.get("Origin"),
+                allow_insecure=cfg.allow_insecure_annotations,
+            ):
+                return (403, _err("csrf", "origin mismatch"), JSON)
         name = params.get("name", "")
         docroot = Path(cfg.docroot)
         try:
@@ -314,6 +329,9 @@ def _make_delete_file(cfg: Config):
             return _storage_error(exc)
         if not deleted:
             return (404, _err("not_found", "file does not exist: {}".format(name)), JSON)
+        # Cascade: drop the .meta sidecar so annotations don't outlive the
+        # document as orphans. Reached by both the Bearer and cookie paths.
+        anno_store.delete_all_for(docroot, name)
         return (200, json.dumps({"deleted": True}).encode("utf-8"), JSON)
     return handler
 

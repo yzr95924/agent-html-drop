@@ -258,7 +258,7 @@ def test_anno_marks_css_color_is_canonical():
     the canonical color values stay in place (so reviewers notice if
     someone re-hardcodes elsewhere)."""
     text = open(os.path.join(ui_mod._UI_DIR, "anno-marks.css"), encoding="utf-8").read()
-    assert "rgba(255, 196, 0, 0.32)" in text, (
+    assert "rgba(255, 196, 0, 0.45)" in text, (
         "anno-marks.css 的 mark 默认色变了——检查 app.js / anno-viewer.js "
         "是否还依赖旧值。"
     )

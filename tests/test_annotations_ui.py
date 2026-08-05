@@ -250,3 +250,18 @@ def test_anno_mode_panel_stays_foldable():
     app = (UI_DIR / "app.js").read_text(encoding="utf-8")
     assert "annoCollapse.hidden" not in app
     assert "wantVisible = relevant && !annoCollapsed" in app
+
+
+# --- browser-side HTML deletion (anno mode: per-row delete button) ---
+
+
+def test_app_js_deletes_html_in_anno_mode():
+    """In annotation mode the file table offers a per-row delete that hits
+    DELETE /api/files/<name> with the anno session cookie — the browser's
+    only HTML write path (read mode stays read-only). Mirrors the server's
+    cookie+CSRF auth on the same route; a destructive click is confirmed
+    first so a stray click can't wipe a document."""
+    app = (UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "deleteFile" in app
+    assert "window.confirm" in app
+    assert 'method: "DELETE"' in app

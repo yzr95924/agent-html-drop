@@ -12,11 +12,11 @@
  * ensureMarkStyle()).
  */
 mark[data-anno-id] {
-  background: rgba(255, 196, 0, 0.32);
+  background: rgba(255, 196, 0, 0.45);
   border-radius: 2px;
   padding: 0 1px;
   cursor: pointer;
 }
 mark[data-anno-id]:hover {
-  background: rgba(255, 196, 0, 0.48);
+  background: rgba(255, 196, 0, 0.62);
 }

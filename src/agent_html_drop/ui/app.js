@@ -163,6 +163,22 @@
           copyUrl(f.url);
         };
         tdActions.appendChild(copyBtn);
+        // Delete action — anno mode only. Read mode stays read-only;
+        // deletion needs the anno session cookie that authorizes the HTML
+        // delete route (api._make_delete_file). Sits in the actions cell
+        // next to 复制 URL so row-click (preview) is undisturbed.
+        if (mode === "anno") {
+          var delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "row-action danger";
+          delBtn.textContent = "删除";
+          delBtn.setAttribute("aria-label", "删除 " + f.name);
+          delBtn.onclick = function (ev) {
+            ev.stopPropagation();   // don't bubble to row preview
+            deleteFile(f.name);
+          };
+          tdActions.appendChild(delBtn);
+        }
 
         tr.appendChild(tdName);
         tr.appendChild(tdSize);
@@ -222,6 +238,34 @@
     } else {
       fallbackCopy(url);
     }
+  }
+
+  function deleteFile(name) {
+    if (!window.confirm("删除 " + name + "?\n此操作同时清除该文档的批注,不可恢复。")) return;
+    fetch("/api/files/" + encodeURIComponent(name), {
+      method: "DELETE",
+      credentials: credentials(),
+      headers: { "Origin": originFor() },
+    }).then(function (r) {
+      if (r.status === 200) {
+        toast("已删除 " + name);
+        // If the deleted file was open in the preview, drop it. Clear the
+        // last-file memory first so loadFiles() below doesn't re-open the
+        // now-missing file (→ a 404 iframe); then hide the section — the
+        // previewHiddenObserver wires that to clearing anno state.
+        if (annoCurrentFile === name) {
+          lsSetStr(LS_LAST_FILE, "");
+          $previewSection.hidden = true;
+        }
+        loadFiles();
+      } else if (r.status === 401) {
+        toast("session 已过期,请退出批注模式重新进入", true);
+      } else {
+        toast("删除失败 " + r.status, true);
+      }
+    }).catch(function () {
+      toast("网络错误,稍后重试", true);
+    });
   }
 
   function fallbackCopy(text) {
@@ -641,7 +685,7 @@
       // Inline fallback (yellow with alpha) so a fetch failure still
       // highlights something instead of leaving raw yellow. The fetch
       // will retry on every subsequent iframe load until it succeeds.
-      _markStyleText = "mark[data-anno-id]{background:rgba(255,196,0,.32);border-radius:2px;padding:0 1px;cursor:pointer;}";
+      _markStyleText = "mark[data-anno-id]{background:rgba(255,196,0,.45);border-radius:2px;padding:0 1px;cursor:pointer;}";
       fetch("/anno-marks.css").then(function (r) {
         return r.ok ? r.text() : null;
       }).then(function (txt) {

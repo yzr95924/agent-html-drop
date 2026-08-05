@@ -149,6 +149,12 @@ def _get(host, port, path, headers=None):
     return conn, conn.getresponse()
 
 
+def _delete(host, port, path, headers=None):
+    conn = http.client.HTTPConnection(host, port, timeout=2)
+    conn.request("DELETE", path, headers=headers or {})
+    return conn, conn.getresponse()
+
+
 def test_auth_correct_token_sets_cookie(http_server):
     srv, cfg = http_server
     host, port = srv.server_address
@@ -601,3 +607,89 @@ def test_patch_annotation_with_json_string_returns_400(http_server):
         assert data["error"] == "invalid_args"
     finally:
         response.read()
+
+
+# --- browser-side HTML deletion (anno session cookie + CSRF) ---------------
+# DELETE /api/files/<name> accepts the agent's Bearer (unchanged) OR the
+# browser's anno session cookie: the management page can delete a document
+# while in annotation mode. The cookie path requires CSRF, like the
+# annotation writes. Deleting HTML also cascades to its .meta sidecar so
+# annotations don't outlive the document as orphans.
+
+def test_delete_file_with_cookie_deletes_html_and_cascades_meta(http_server):
+    srv, cfg = http_server
+    docroot = Path(cfg.docroot)
+    anno_store.add(docroot, "design.html", "q", "c", cfg.token)
+    assert (docroot / "design.html.meta").exists()
+
+    from agent_html_drop.auth_anno import ANNO_COOKIE_NAME, sign_cookie
+    cookie_value = sign_cookie(cfg.token)
+    host, port = srv.server_address
+    conn, response = _delete(
+        host, port, "/api/files/design.html",
+        headers={
+            "Cookie": ANNO_COOKIE_NAME + "=" + cookie_value,
+            "Origin": "https://notes.example.com",
+            "Host": "notes.example.com",
+        },
+    )
+    try:
+        assert response.status == 200
+        assert json.loads(response.read()) == {"deleted": True}
+        assert not (docroot / "design.html").exists()
+        assert not (docroot / "design.html.meta").exists()  # cascaded
+    finally:
+        conn.close()
+
+
+def test_delete_file_without_cookie_or_bearer_returns_401(http_server):
+    srv, cfg = http_server
+    host, port = srv.server_address
+    conn, response = _delete(host, port, "/api/files/design.html")
+    try:
+        assert response.status == 401
+        response.read()
+    finally:
+        conn.close()
+
+
+def test_delete_file_with_cookie_wrong_origin_returns_403(http_server):
+    srv, cfg = http_server
+    docroot = Path(cfg.docroot)
+    from agent_html_drop.auth_anno import ANNO_COOKIE_NAME, sign_cookie
+    cookie_value = sign_cookie(cfg.token)
+    host, port = srv.server_address
+    conn, response = _delete(
+        host, port, "/api/files/design.html",
+        headers={
+            "Cookie": ANNO_COOKIE_NAME + "=" + cookie_value,
+            "Origin": "https://evil.example.com",
+            "Host": "notes.example.com",
+        },
+    )
+    try:
+        assert response.status == 403
+        response.read()
+        # Rejected before touching disk.
+        assert (docroot / "design.html").exists()
+    finally:
+        conn.close()
+
+
+def test_delete_file_with_bearer_still_works_and_cascades(http_server):
+    """Agent path (Bearer) is unchanged and also cascades .meta cleanup."""
+    srv, cfg = http_server
+    docroot = Path(cfg.docroot)
+    anno_store.add(docroot, "design.html", "q", "c", cfg.token)
+    host, port = srv.server_address
+    conn, response = _delete(
+        host, port, "/api/files/design.html",
+        headers={"Authorization": "Bearer " + cfg.token},
+    )
+    try:
+        assert response.status == 200
+        response.read()
+        assert not (docroot / "design.html").exists()
+        assert not (docroot / "design.html.meta").exists()
+    finally:
+        conn.close()

@@ -344,6 +344,25 @@ def test_delete_html_missing(mcp_server):
     assert inner["error"] == "not_found"
 
 
+def test_delete_html_cascades_annotation_meta(mcp_server):
+    """delete_html must also drop the .meta sidecar — annotations must not
+    outlive the document as orphans (regression: it used to leave .meta
+    behind, so list_annotations on a deleted file still returned stale
+    entries until the meta was manually removed)."""
+    from agent_html_drop.storage import annotations as anno_store
+    http, _, docroot = mcp_server
+    (docroot / "design.html").write_text("x")
+    anno_store.add(docroot, "design.html", "q", "c", "tok")
+    assert (docroot / "design.html.meta").exists()
+    status, payload = _rpc(http, "tools/call", {
+        "name": "delete_html",
+        "arguments": {"name": "design.html"},
+    })
+    assert payload["result"]["isError"] is False
+    assert not (docroot / "design.html").exists()
+    assert not (docroot / "design.html.meta").exists()  # cascaded
+
+
 # --- tools/call: get_public_url ----------------------------------------------
 
 def test_get_public_url(mcp_server):

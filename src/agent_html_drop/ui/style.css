@@ -213,6 +213,17 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
   background: var(--bg-elev);
   border-color: var(--accent);
 }
+/* Destructive variant of the row-action button (anno-mode file delete).
+   Text + border in --danger, no fill — signals danger without competing
+   with the row's primary content or the red #load-error surface. */
+.row-action.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.row-action.danger:hover {
+  background: rgba(255, 118, 118, 0.12);
+  border-color: var(--danger);
+}
 
 /* Inline load-error card — visible in the table area when GET /api/files
    fails. Toast is for transient operations; this is for state. */

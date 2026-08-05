@@ -90,7 +90,7 @@ daemon 监听 `127.0.0.1:8765`（默认），由 nginx 在前面 HTTPS 反代 + 
 
 - `POST /mcp` —— MCP Streamable HTTP（agent 走这里，`Authorization: Bearer <token>` 强制）
 - `GET /` —— HTML 管理页（浏览器，只读；批注模式走 session cookie）
-- `* /api/*` —— JSON API（管理页背后；DELETE 等写操作仍要 Bearer）
+- `* /api/*` —— JSON API（管理页背后；写操作要 Bearer；`DELETE /api/files/<name>` 另接受 anno session cookie + CSRF）
 - `/files/*` —— 经典模式 nginx 直接从 docroot 读取；**容器模式（§15.3.1）由 daemon 自服务**（流式 + 路径穿越防护），nginx 退化为纯反代。两种模式都无 auth（公开 docroot）
 
 MCP 工具（`tools/call`）：`upload_html` / `list_html` / `delete_html` / `get_public_url`
@@ -104,6 +104,7 @@ MCP 工具（`tools/call`）：`upload_html` / `list_html` / `delete_html` / `ge
 
 ## 注意事项
 
-- 管理页**故意**只读：删除 / 上传只能走 agent MCP；token 不进 UI、不进 localStorage。
-- 批注写路径（浏览器 session cookie）与 HTML 写路径（agent Bearer）**互不重叠**；
-  agent 无 `add_annotation`，浏览器无 HTML 写接口。
+- 管理页**默认只读**；anno 模式下可删 HTML（anno session cookie + CSRF，见 `api._make_delete_file`），
+  上传仍只走 agent MCP；token 不进 UI、不进 localStorage（HttpOnly cookie）。
+- 批注写路径（浏览器 session cookie）与 HTML 上传路径（agent Bearer）仍分离；
+  agent 无 `add_annotation`，浏览器 HTML 写接口**仅限删除**（anno cookie + CSRF），无上传接口。
