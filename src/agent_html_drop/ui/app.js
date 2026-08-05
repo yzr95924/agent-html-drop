@@ -393,6 +393,9 @@
     if (mode === "anno") {
       $annoToggle.hidden = true;
       $annoModeHint.hidden = false;
+      // The side panel is anno mode's editing surface — surface it on entry.
+      // (Still foldable afterwards; the fold persists like read mode's.)
+      setAnnoCollapsed(false);
     } else {
       $annoToggle.hidden = false;
       $annoModeHint.hidden = true;
@@ -412,13 +415,16 @@
   // Read mode with zero annotations stays out of the way.
   function applyAnnoSidebarVisibility() {
     var relevant = !!annoCurrentFile && (mode === "anno" || annoEntries.length > 0);
-    // Anno mode treats the sidebar as the editing surface → show by default.
-    // Read mode keeps it folded (clear of the reading column) unless the
-    // user explicitly opened it; comments are read via the click popover.
-    var wantVisible = relevant && (mode === "anno" || !annoCollapsed);
+    // The fold is user-controlled in BOTH modes — anno mode auto-opens the
+    // panel on entry (see setMode) since it's the editing surface, but the
+    // collapse button is never taken away. While open, the panel PUSHES the
+    // page left (body.anno-sidebar-open, see style.css) instead of overlaying
+    // it, so the right-edge controls (大纲 toggle, iframe scrollbar, header
+    // actions) stay clickable. Comments are also readable via the popover.
+    var wantVisible = relevant && !annoCollapsed;
     $annoSidebar.classList.toggle("collapsed", !wantVisible);
     $annoOpener.hidden = !(relevant && !wantVisible);
-    if ($annoCollapse) $annoCollapse.hidden = (mode === "anno");
+    document.body.classList.toggle("anno-sidebar-open", wantVisible);
   }
 
   function setAnnoCollapsed(c) {

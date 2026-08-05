@@ -6,6 +6,7 @@
   --accent: #5da7ff;
   --danger: #ff7676;
   --border: #2a2f3a;
+  --sidebar-w: 280px;   /* annotation panel width — also the page push distance */
 }
 
 * { box-sizing: border-box; }
@@ -295,7 +296,7 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
   position: fixed;
   right: 0;
   top: 0;
-  width: 280px;
+  width: var(--sidebar-w);
   height: 100vh;
   background: var(--bg);
   border-left: 1px solid var(--border);
@@ -310,6 +311,25 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
 #anno-sidebar.collapsed {
   transform: translateX(100%);
   pointer-events: none;
+}
+
+/* While the panel is open it PUSHES the page left instead of overlaying
+   it. The panel is position:fixed at the right edge, full viewport height —
+   a pure overlay covers everything living at that edge: the 大纲 toggle in
+   .preview-head, the iframe's own scrollbar, and the header's action corner.
+   (Regression in a804fea: anno mode forced the panel open AND hid the fold
+   button, leaving no way to reach those controls.) margin-right animates
+   in lockstep with the panel's 0.2s slide. */
+header, main {
+  transition: margin-right 0.2s ease;
+}
+body.anno-sidebar-open header,
+body.anno-sidebar-open main {
+  margin-right: var(--sidebar-w);
+}
+/* The toast is fixed at the right edge too — keep it clear of the panel. */
+body.anno-sidebar-open #toast {
+  right: calc(var(--sidebar-w) + 24px);
 }
 
 /* Header action cluster (refresh + collapse) replaces the lone refresh btn. */

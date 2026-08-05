@@ -224,3 +224,29 @@ def test_popover_renders_annotation_via_textcontent():
     viewer = (UI_DIR / "anno-viewer.js").read_text(encoding="utf-8")
     assert "$popQuote.textContent" in app and "$popComment.textContent" in app
     assert "$popQuote.textContent" in viewer and "$popComment.textContent" in viewer
+
+
+# --- sidebar push-layout: open panel must never cover right-edge controls ---
+
+
+def test_open_sidebar_pushes_page_instead_of_overlaying():
+    """Regression: the fixed full-height panel used to sit ON TOP of the
+    right-edge controls (大纲 toggle, iframe scrollbar, header actions).
+    While open it must push the page left via body.anno-sidebar-open, with
+    the push distance sharing the panel width var so the two can't drift."""
+    css = (UI_DIR / "style.css").read_text(encoding="utf-8")
+    app = (UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "body.anno-sidebar-open" in css
+    assert "margin-right: var(--sidebar-w)" in css
+    assert "width: var(--sidebar-w)" in css
+    assert '"anno-sidebar-open"' in app
+
+
+def test_anno_mode_panel_stays_foldable():
+    """Regression: anno mode must not force the panel open with the collapse
+    button hidden — that left NO way to uncover the right-edge buttons short
+    of exiting anno mode. The fold stays user-controlled in both modes (anno
+    mode merely auto-OPENS on entry via setAnnoCollapsed(false))."""
+    app = (UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "annoCollapse.hidden" not in app
+    assert "wantVisible = relevant && !annoCollapsed" in app
