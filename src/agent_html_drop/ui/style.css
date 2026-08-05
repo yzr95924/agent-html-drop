@@ -388,12 +388,18 @@ body.anno-sidebar-open #toast {
 
 #anno-sidebar header {
   display: flex;
-  /* No title — just the refresh + collapse actions, pushed to the right
-     edge of the panel (the title "批注" was dropped: the panel is
-     self-evidently the annotation list, the label was dead weight). */
   justify-content: flex-end;
   align-items: center;
-  margin-bottom: 8px;
+  /* Reset the global `header` rule (padding 12px 24px + bg-elev +
+     border-bottom — that one is for the page's top bar). Here the header
+     is just a thin row holding refresh + collapse at the panel's
+     top-right; the sidebar's own 12px padding already insets it. Without
+     this reset the buttons sat in a separate bg-elev bar that read as
+     "outside" the list once the title was dropped. */
+  padding: 0;
+  margin: 0 0 8px 0;
+  background: none;
+  border: 0;
 }
 
 #anno-sidebar h3 { margin: 0; font-size: 14px; }
